@@ -90,6 +90,16 @@ export class EmotionEngine {
     }
   }
 
+  async toggleWebcam() {
+    if (this.isStreaming) {
+      this.stopStream();
+      return false;
+    } else {
+      await this.startWebcam();
+      return true;
+    }
+  }
+
   startDemoMode() {
     this.isStreaming = true;
     this.isDemoMode = true;
@@ -99,15 +109,27 @@ export class EmotionEngine {
 
   stopStream() {
     this.isStreaming = false;
+    this.isDemoMode = false;
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
     }
-    if (this.videoElement && this.videoElement.srcObject) {
-      const tracks = this.videoElement.srcObject.getTracks();
-      tracks.forEach(track => track.stop());
-      this.videoElement.srcObject = null;
+    if (this.videoElement) {
+      if (this.videoElement.srcObject) {
+        try {
+          const tracks = this.videoElement.srcObject.getTracks();
+          tracks.forEach(track => track.stop());
+        } catch (e) {}
+        this.videoElement.srcObject = null;
+      }
+      try {
+        this.videoElement.pause();
+      } catch (e) {}
     }
+    if (this.ctx && this.canvasElement) {
+      this.ctx.clearRect(0, 0, this.canvasElement.width, this.canvasElement.height);
+    }
+    this.detectedFaces = [];
   }
 
   resizeCanvas() {
