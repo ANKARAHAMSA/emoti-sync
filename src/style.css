@@ -982,6 +982,45 @@ input[type="range"]::-webkit-slider-thumb:hover {
   color: var(--text-secondary);
 }
 
+/* Multi-Face Telemetry Section */
+.multi-face-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.multi-face-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.multi-face-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.multi-face-card .face-tag {
+  font-weight: 700;
+  color: var(--accent-cyan);
+  font-family: var(--font-heading);
+}
+
+.multi-face-card .face-emotion-badge {
+  text-transform: capitalize;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border);
+}
+
 /* 7 Emotion Gauges Section */
 .emotion-meters-section {
   display: flex;

@@ -341,7 +341,34 @@ export class UIController {
     // Update Quick Telemetry
     document.getElementById('primaryEmotionTag').textContent = dominant;
     document.getElementById('positivityScoreVal').textContent = `${reading.positivity}%`;
-    document.getElementById('faceCountVal').textContent = emotionEngine.isStreaming ? '1 Face' : '0';
+    
+    // Multi-Face Telemetry Update
+    const detectedFaces = emotionEngine.detectedFaces || [];
+    const faceCount = detectedFaces.length;
+    const faceCountVal = document.getElementById('faceCountVal');
+    if (faceCountVal) {
+      faceCountVal.textContent = emotionEngine.isStreaming 
+        ? (faceCount > 1 ? `${faceCount} Faces Tracked` : '1 Face Tracked')
+        : '0 Faces';
+    }
+
+    const multiContainer = document.getElementById('multiFaceContainer');
+    const multiList = document.getElementById('multiFaceList');
+    const multiBadge = document.getElementById('multiFaceBadge');
+
+    if (faceCount > 1 && multiContainer && multiList) {
+      multiContainer.classList.remove('hidden');
+      if (multiBadge) multiBadge.textContent = `${faceCount} Tracked`;
+      
+      multiList.innerHTML = detectedFaces.map(f => `
+        <div class="multi-face-card">
+          <span class="face-tag">Face #${f.id || 1}</span>
+          <span class="face-emotion-badge">${f.dominant || 'neutral'} ${Math.round((f.confidence || 0.95) * 100)}%</span>
+        </div>
+      `).join('');
+    } else if (multiContainer) {
+      multiContainer.classList.add('hidden');
+    }
 
     // Update Chart with smooth fluid interpolation
     if (this.chartInstance) {
