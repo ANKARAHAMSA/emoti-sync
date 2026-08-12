@@ -42,9 +42,10 @@ export class UIController {
     try {
       await emotionEngine.startWebcam();
       if (standbyEl) standbyEl.classList.add('hidden');
-      this.showToast('Webcam feed initialized', 'success');
+      const badge = document.getElementById('streamSourceBadge');
+      if (badge) badge.textContent = 'Live Webcam Stream';
+      this.showToast('Live Webcam Active', 'success');
     } catch (e) {
-      // Keep standby active so user can click Initialize Camera or Run Synthetic Demo
       if (standbyEl) standbyEl.classList.remove('hidden');
     }
   }
