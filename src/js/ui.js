@@ -41,13 +41,43 @@ export class UIController {
     const standbyEl = document.getElementById('cameraStandby');
     try {
       await emotionEngine.startWebcam();
-      if (standbyEl) standbyEl.classList.add('hidden');
-      const badge = document.getElementById('streamSourceBadge');
-      if (badge) badge.textContent = 'Live Webcam Stream';
-      this.showToast('Live Webcam Active', 'success');
+      this.updateCameraToggleUI(true);
     } catch (e) {
       if (standbyEl) standbyEl.classList.remove('hidden');
+      this.updateCameraToggleUI(false);
     }
+  }
+
+  updateCameraToggleUI(isStreaming) {
+    const textEl = document.getElementById('cameraToggleText');
+    const iconEl = document.getElementById('cameraToggleIcon');
+    const btn = document.getElementById('btnToggleCamera');
+    const standbyEl = document.getElementById('cameraStandby');
+    const badge = document.getElementById('streamSourceBadge');
+
+    if (isStreaming) {
+      if (textEl) textEl.textContent = 'Stop Camera';
+      if (iconEl) iconEl.setAttribute('data-lucide', 'video-off');
+      if (btn) {
+        btn.classList.remove('btn-danger');
+        btn.classList.add('btn-secondary');
+      }
+      if (standbyEl) standbyEl.classList.add('hidden');
+      if (badge) badge.textContent = 'Live Webcam Stream';
+      this.showToast('Live Camera Stream Active', 'success');
+    } else {
+      if (textEl) textEl.textContent = 'Start Camera';
+      if (iconEl) iconEl.setAttribute('data-lucide', 'video');
+      if (btn) {
+        btn.classList.add('btn-danger');
+        btn.classList.remove('btn-secondary');
+      }
+      if (standbyEl) standbyEl.classList.remove('hidden');
+      if (badge) badge.textContent = 'Stream Paused';
+      this.showToast('Camera Stream Paused', 'info');
+    }
+
+    if (window.lucide) window.lucide.createIcons();
   }
 
   bindNavigation() {
@@ -73,12 +103,20 @@ export class UIController {
   }
 
   bindControls() {
-    // Camera Standby Buttons
+    // Start / Stop Camera Toggle Buttons
+    document.getElementById('btnToggleCamera')?.addEventListener('click', async () => {
+      try {
+        const isStreaming = await emotionEngine.toggleWebcam();
+        this.updateCameraToggleUI(isStreaming);
+      } catch (err) {
+        this.showToast('Camera access denied or unavailable', 'error');
+      }
+    });
+
     document.getElementById('btnStartCamera')?.addEventListener('click', async () => {
       try {
         await emotionEngine.startWebcam();
-        document.getElementById('cameraStandby')?.classList.add('hidden');
-        this.showToast('Live camera feed active', 'success');
+        this.updateCameraToggleUI(true);
       } catch (err) {
         this.showToast('Camera permission denied or camera unavailable', 'error');
       }

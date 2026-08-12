@@ -98,6 +98,16 @@ export class EmotionEngine {
     }
   }
 
+  async toggleWebcam() {
+    if (this.isStreaming && !this.isDemoMode) {
+      this.stopStream();
+      return false;
+    } else {
+      await this.startWebcam();
+      return true;
+    }
+  }
+
   startDemoMode() {
     this.isStreaming = true;
     this.isDemoMode = true;

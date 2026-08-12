@@ -318,6 +318,17 @@ body.theme-disgusted .blob-1 { background: radial-gradient(circle, var(--color-d
   border-color: var(--glass-border-bright);
 }
 
+.btn-danger {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #ef4444;
+}
+
+.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
 .btn-accent {
   background: linear-gradient(135deg, var(--accent-cyan), #0284c7);
   border: 1px solid rgba(255, 255, 255, 0.2);
