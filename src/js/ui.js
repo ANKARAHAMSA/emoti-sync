@@ -274,26 +274,22 @@ export class UIController {
       data: {
         labels: [],
         datasets: [
-          { label: 'Happy', borderColor: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.12)', data: [], tension: 0.48, borderWidth: 2.5, pointRadius: 0, fill: true, cubicInterpolationMode: 'monotone' },
-          { label: 'Neutral', borderColor: '#06b6d4', backgroundColor: 'rgba(6, 182, 212, 0.12)', data: [], tension: 0.48, borderWidth: 2.5, pointRadius: 0, fill: true, cubicInterpolationMode: 'monotone' },
-          { label: 'Surprised', borderColor: '#a855f7', backgroundColor: 'rgba(168, 85, 247, 0.12)', data: [], tension: 0.48, borderWidth: 2.5, pointRadius: 0, fill: true, cubicInterpolationMode: 'monotone' },
-          { label: 'Sad', borderColor: '#3b82f6', backgroundColor: 'rgba(59, 130, 246, 0.12)', data: [], tension: 0.48, borderWidth: 2.5, pointRadius: 0, fill: true, cubicInterpolationMode: 'monotone' }
+          { label: 'Happy', borderColor: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.1)', data: [], tension: 0.35, fill: true },
+          { label: 'Neutral', borderColor: '#06b6d4', backgroundColor: 'rgba(6, 182, 212, 0.1)', data: [], tension: 0.35, fill: true },
+          { label: 'Surprised', borderColor: '#a855f7', backgroundColor: 'rgba(168, 85, 247, 0.1)', data: [], tension: 0.35, fill: true },
+          { label: 'Sad', borderColor: '#3b82f6', backgroundColor: 'rgba(59, 130, 246, 0.1)', data: [], tension: 0.35, fill: true },
+          { label: 'Angry', borderColor: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.1)', data: [], tension: 0.35, fill: true },
+          { label: 'Fearful', borderColor: '#f97316', backgroundColor: 'rgba(249, 115, 22, 0.1)', data: [], tension: 0.35, fill: true },
+          { label: 'Disgusted', borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', data: [], tension: 0.35, fill: true }
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        animation: {
-          duration: 450,
-          easing: 'easeInOutCubic'
-        },
-        interaction: {
-          intersect: false,
-          mode: 'index'
-        },
+        animation: { duration: 300 },
         scales: {
-          x: { grid: { color: 'rgba(255, 255, 255, 0.04)' }, ticks: { color: '#9ca3af', font: { family: 'JetBrains Mono', size: 10 } } },
-          y: { min: 0, max: 100, grid: { color: 'rgba(255, 255, 255, 0.04)' }, ticks: { color: '#9ca3af', font: { family: 'JetBrains Mono', size: 10 } } }
+          x: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af', font: { family: 'JetBrains Mono', size: 10 } } },
+          y: { min: 0, max: 100, grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af', font: { family: 'JetBrains Mono', size: 10 } } }
         },
         plugins: {
           legend: { labels: { color: '#f3f4f6', font: { family: 'Inter', size: 12 } } }
@@ -370,7 +366,7 @@ export class UIController {
       multiContainer.classList.add('hidden');
     }
 
-    // Update Chart with smooth fluid interpolation
+    // Update Chart across all 7 emotions
     if (this.chartInstance) {
       const labels = analyticsEngine.history.map(h => h.timeLabel);
       this.chartInstance.data.labels = labels;
@@ -378,7 +374,10 @@ export class UIController {
       this.chartInstance.data.datasets[1].data = analyticsEngine.history.map(h => Math.round((h.scores.neutral || 0) * 100));
       this.chartInstance.data.datasets[2].data = analyticsEngine.history.map(h => Math.round((h.scores.surprised || 0) * 100));
       this.chartInstance.data.datasets[3].data = analyticsEngine.history.map(h => Math.round((h.scores.sad || 0) * 100));
-      this.chartInstance.update('none'); // Update without harsh redraws for liquid 60FPS wave flow
+      this.chartInstance.data.datasets[4].data = analyticsEngine.history.map(h => Math.round((h.scores.angry || 0) * 100));
+      this.chartInstance.data.datasets[5].data = analyticsEngine.history.map(h => Math.round((h.scores.fearful || 0) * 100));
+      this.chartInstance.data.datasets[6].data = analyticsEngine.history.map(h => Math.round((h.scores.disgusted || 0) * 100));
+      this.chartInstance.update();
     }
 
     // Update Analytics Tab Metrics
