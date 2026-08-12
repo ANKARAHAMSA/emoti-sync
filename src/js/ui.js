@@ -274,19 +274,26 @@ export class UIController {
       data: {
         labels: [],
         datasets: [
-          { label: 'Happy', borderColor: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.1)', data: [], tension: 0.4, fill: true },
-          { label: 'Neutral', borderColor: '#06b6d4', backgroundColor: 'rgba(6, 182, 212, 0.1)', data: [], tension: 0.4, fill: true },
-          { label: 'Surprised', borderColor: '#a855f7', backgroundColor: 'rgba(168, 85, 247, 0.1)', data: [], tension: 0.4, fill: true },
-          { label: 'Sad', borderColor: '#3b82f6', backgroundColor: 'rgba(59, 130, 246, 0.1)', data: [], tension: 0.4, fill: true }
+          { label: 'Happy', borderColor: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.12)', data: [], tension: 0.48, borderWidth: 2.5, pointRadius: 0, fill: true, cubicInterpolationMode: 'monotone' },
+          { label: 'Neutral', borderColor: '#06b6d4', backgroundColor: 'rgba(6, 182, 212, 0.12)', data: [], tension: 0.48, borderWidth: 2.5, pointRadius: 0, fill: true, cubicInterpolationMode: 'monotone' },
+          { label: 'Surprised', borderColor: '#a855f7', backgroundColor: 'rgba(168, 85, 247, 0.12)', data: [], tension: 0.48, borderWidth: 2.5, pointRadius: 0, fill: true, cubicInterpolationMode: 'monotone' },
+          { label: 'Sad', borderColor: '#3b82f6', backgroundColor: 'rgba(59, 130, 246, 0.12)', data: [], tension: 0.48, borderWidth: 2.5, pointRadius: 0, fill: true, cubicInterpolationMode: 'monotone' }
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        animation: { duration: 300 },
+        animation: {
+          duration: 450,
+          easing: 'easeInOutCubic'
+        },
+        interaction: {
+          intersect: false,
+          mode: 'index'
+        },
         scales: {
-          x: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af', font: { family: 'JetBrains Mono', size: 10 } } },
-          y: { min: 0, max: 100, grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af', font: { family: 'JetBrains Mono', size: 10 } } }
+          x: { grid: { color: 'rgba(255, 255, 255, 0.04)' }, ticks: { color: '#9ca3af', font: { family: 'JetBrains Mono', size: 10 } } },
+          y: { min: 0, max: 100, grid: { color: 'rgba(255, 255, 255, 0.04)' }, ticks: { color: '#9ca3af', font: { family: 'JetBrains Mono', size: 10 } } }
         },
         plugins: {
           legend: { labels: { color: '#f3f4f6', font: { family: 'Inter', size: 12 } } }
@@ -336,7 +343,7 @@ export class UIController {
     document.getElementById('positivityScoreVal').textContent = `${reading.positivity}%`;
     document.getElementById('faceCountVal').textContent = emotionEngine.isStreaming ? '1 Face' : '0';
 
-    // Update Chart
+    // Update Chart with smooth fluid interpolation
     if (this.chartInstance) {
       const labels = analyticsEngine.history.map(h => h.timeLabel);
       this.chartInstance.data.labels = labels;
@@ -344,7 +351,7 @@ export class UIController {
       this.chartInstance.data.datasets[1].data = analyticsEngine.history.map(h => Math.round((h.scores.neutral || 0) * 100));
       this.chartInstance.data.datasets[2].data = analyticsEngine.history.map(h => Math.round((h.scores.surprised || 0) * 100));
       this.chartInstance.data.datasets[3].data = analyticsEngine.history.map(h => Math.round((h.scores.sad || 0) * 100));
-      this.chartInstance.update();
+      this.chartInstance.update('none'); // Update without harsh redraws for liquid 60FPS wave flow
     }
 
     // Update Analytics Tab Metrics
