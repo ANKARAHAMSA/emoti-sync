@@ -387,10 +387,37 @@ export class EmotionEngine {
     }
     browContrast = browMax - browMin;
 
+    // Analyze mouth corners vs center lip for sad / frown / pout detection
+    let leftCornerLum = 0, rightCornerLum = 0, centerLipLum = 0;
+    let leftCount = 0, rightCount = 0, centerCount = 0;
+
+    for (let y = Math.floor(120 * 0.65); y < Math.floor(120 * 0.85); y++) {
+      for (let x = Math.floor(160 * 0.28); x < Math.floor(160 * 0.38); x++) {
+        const idx = (y * 160 + x) * 4;
+        leftCornerLum += (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
+        leftCount++;
+      }
+      for (let x = Math.floor(160 * 0.62); x < Math.floor(160 * 0.72); x++) {
+        const idx = (y * 160 + x) * 4;
+        rightCornerLum += (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
+        rightCount++;
+      }
+      for (let x = Math.floor(160 * 0.44); x < Math.floor(160 * 0.56); x++) {
+        const idx = (y * 160 + x) * 4;
+        centerLipLum += (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
+        centerCount++;
+      }
+    }
+
+    const avgLeftCorner = leftCornerLum / Math.max(1, leftCount);
+    const avgRightCorner = rightCornerLum / Math.max(1, rightCount);
+    const avgCenterLip = centerLipLum / Math.max(1, centerCount);
+    const avgCorners = (avgLeftCorner + avgRightCorner) / 2;
+
     const isSmile = (mouthContrast > 115 || avgLum > 110);
     const isOpenMouthLaugh = (mouthContrast > 140 && avgLum > 120);
     const isSurprised = (browContrast > 130 && mouthContrast > 130 && avgLum > 130);
-    const isSad = (avgLum < 70 && mouthContrast < 80);
+    const isSadFrown = (avgCorners < avgCenterLip - 3 || (mouthContrast < 98 && avgLum < 128));
 
     if (isOpenMouthLaugh) {
       return { happy: 0.95, neutral: 0.03, surprised: 0.02, sad: 0, angry: 0, fearful: 0, disgusted: 0 };
@@ -398,8 +425,8 @@ export class EmotionEngine {
       return { happy: 0.88, neutral: 0.08, surprised: 0.02, sad: 0.01, angry: 0.01, fearful: 0, disgusted: 0 };
     } else if (isSurprised) {
       return { happy: 0.10, neutral: 0.05, surprised: 0.82, sad: 0.01, angry: 0.01, fearful: 0.01, disgusted: 0 };
-    } else if (isSad) {
-      return { happy: 0.02, neutral: 0.15, surprised: 0.01, sad: 0.78, angry: 0.03, fearful: 0.01, disgusted: 0 };
+    } else if (isSadFrown) {
+      return { happy: 0.01, neutral: 0.05, surprised: 0.01, sad: 0.88, angry: 0.03, fearful: 0.01, disgusted: 0.01 };
     }
 
     return { happy: 0.05, neutral: 0.85, surprised: 0.03, sad: 0.03, angry: 0.02, fearful: 0.01, disgusted: 0.01 };
