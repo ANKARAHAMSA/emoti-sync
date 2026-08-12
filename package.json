@@ -1,0 +1,22 @@
+{
+  "name": "emoti-sync",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host --port 3000",
+    "build": "vite build",
+    "preview": "vite preview --port 3000",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vladmandic/face-api": "^1.7.12",
+    "canvas-confetti": "^1.9.4",
+    "chart.js": "^4.4.8",
+    "lucide": "^0.475.0"
+  },
+  "devDependencies": {
+    "vite": "^6.1.1",
+    "vitest": "^3.0.6"
+  }
+}

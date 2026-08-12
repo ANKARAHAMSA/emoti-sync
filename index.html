@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EmotiSync — Realtime Face Emotion Recognition & Mood Telemetry</title>
+  <meta name="description" content="Ultra-modern, privacy-first facial emotion recognition, real-time analytics, ambient color synchronization, and mood soundscapes.">
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- Styles -->
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body class="theme-neutral">
+  <!-- Dynamic Ambient Background Glow Canvas -->
+  <div class="ambient-glow-wrapper" id="ambientWrapper">
+    <div class="ambient-blob blob-1"></div>
+    <div class="ambient-blob blob-2"></div>
+    <div class="ambient-blob blob-3"></div>
+    <div class="glass-grid-overlay"></div>
+  </div>
+
+  <div class="app-container">
+    <!-- Top Glass Header -->
+    <header class="app-header glass-card">
+      <div class="brand-section">
+        <div class="logo-icon-box">
+          <i data-lucide="scan-face" class="brand-icon"></i>
+        </div>
+        <div class="brand-text">
+          <h1 class="app-title">Emoti<span>Sync</span></h1>
+          <span class="app-subtitle">Realtime Face Telemetry & Mood Engine</span>
+        </div>
+      </div>
+
+      <nav class="nav-tabs">
+        <button class="nav-btn active" data-tab="webcam">
+          <i data-lucide="camera"></i>
+          <span>Live Stream</span>
+        </button>
+        <button class="nav-btn" data-tab="scanner">
+          <i data-lucide="image"></i>
+          <span>Media Scanner</span>
+        </button>
+        <button class="nav-btn" data-tab="analytics">
+          <i data-lucide="activity"></i>
+          <span>Mood Timeline</span>
+        </button>
+        <button class="nav-btn" data-tab="soundscapes">
+          <i data-lucide="disc"></i>
+          <span>Mood Audio</span>
+        </button>
+      </nav>
+
+      <div class="header-actions">
+        <div class="status-badge" id="engineStatusBadge">
+          <span class="status-dot green"></span>
+          <span id="engineStatusText">Local Engine Ready</span>
+        </div>
+        <button class="glass-btn btn-secondary" id="btnSnapshot" title="Capture Annotated Frame">
+          <i data-lucide="aperture"></i>
+          <span>Snapshot</span>
+        </button>
+        <button class="glass-btn btn-accent" id="btnExportLogs" title="Export Session Data">
+          <i data-lucide="download"></i>
+          <span>Export Data</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Workspace -->
+    <main class="workspace-grid">
+
+      <!-- TAB 1: WEBCAM LIVE STREAM -->
+      <section class="tab-content active" id="tab-webcam">
+        <div class="viewport-card glass-card">
+          <div class="viewport-header">
+            <div class="viewport-title-group">
+              <i data-lucide="video" class="section-icon"></i>
+              <h3>Optical Stream Feed</h3>
+              <span class="badge badge-pulse" id="streamSourceBadge">Webcam Feed</span>
+            </div>
+            <div class="viewport-controls">
+              <button class="icon-toggle active" id="toggleMeshBtn" title="Toggle 68-Point Mesh">
+                <i data-lucide="grid"></i>
+              </button>
+              <button class="icon-toggle active" id="toggleBboxBtn" title="Toggle Bounding Box">
+                <i data-lucide="square"></i>
+              </button>
+
+              <button class="glass-btn btn-sm" id="btnSimulateStream" title="Toggle Demo Feed Mode">
+                <i data-lucide="sparkles"></i>
+                <span id="simBtnText">Demo Video Stream</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="stream-container" id="streamContainer">
+            <!-- Video element (hidden or active) -->
+            <video id="webcamVideo" autoplay playsinline muted></video>
+            <!-- Canvas overlay for bounding boxes & landmarks -->
+            <canvas id="overlayCanvas"></canvas>
+            
+            <!-- Video Overlay Controls / Watermark -->
+            <div class="overlay-telemetry-badge" id="liveFpsBadge">
+              <span class="mono">FPS: <strong id="fpsVal">0</strong></span>
+              <span class="divider">|</span>
+              <span class="mono">LATENCY: <strong id="latencyVal">12ms</strong></span>
+            </div>
+
+            <div class="camera-standby-screen" id="cameraStandby">
+              <div class="standby-content">
+                <div class="pulse-ring">
+                  <i data-lucide="video-off"></i>
+                </div>
+                <h4>Camera Access Required</h4>
+                <p>Allow browser camera permissions for live facial emotion detection, or start Demo Video Mode.</p>
+                <div class="standby-actions">
+                  <button class="glass-btn btn-accent" id="btnStartCamera">
+                    <i data-lucide="power"></i>
+                    <span>Initialize Camera</span>
+                  </button>
+                  <button class="glass-btn btn-secondary" id="btnStartDemo">
+                    <i data-lucide="play-circle"></i>
+                    <span>Run Synthetic Demo</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="viewport-footer">
+            <div class="quick-telemetry">
+              <div class="telemetry-item">
+                <span class="label">Faces Tracked</span>
+                <span class="value" id="faceCountVal">0</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="label">Primary Emotion</span>
+                <span class="value dominant-tag" id="primaryEmotionTag">—</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="label">Positivity Score</span>
+                <span class="value" id="positivityScoreVal">0%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: MEDIA SCANNER (IMAGE / VIDEO FILE ANALYZER) -->
+      <section class="tab-content" id="tab-scanner">
+        <div class="viewport-card glass-card">
+          <div class="viewport-header">
+            <div class="viewport-title-group">
+              <i data-lucide="file-search" class="section-icon"></i>
+              <h3>Offline Media Scanner</h3>
+              <span class="badge">Image & Video Deep Scan</span>
+            </div>
+          </div>
+
+          <div class="scanner-dropzone" id="dropzone">
+            <input type="file" id="mediaFileInput" accept="image/*,video/*" class="file-input-hidden">
+            <div class="dropzone-content">
+              <div class="drop-icon-box">
+                <i data-lucide="upload-cloud"></i>
+              </div>
+              <h4>Drag & Drop Photo or Video File</h4>
+              <p>Supports JPG, PNG, WEBP, MP4, WEBM up to 50MB</p>
+              <button class="glass-btn btn-secondary" id="btnSelectFile">
+                <i data-lucide="folder-open"></i>
+                <span>Browse Local Files</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="scanner-results-container hidden" id="scannerResults">
+            <div class="preview-stage">
+              <div class="preview-media-box">
+                <img id="scanImagePreview" class="scan-preview-element hidden" alt="Scan preview">
+                <video id="scanVideoPreview" class="scan-preview-element hidden" controls></video>
+                <canvas id="scanCanvasOverlay"></canvas>
+              </div>
+              <div class="preview-side-info">
+                <h4>Extracted Face Crop Gallery</h4>
+                <div class="face-crop-list" id="faceCropList">
+                  <!-- Dynamic face cards -->
+                </div>
+                <button class="glass-btn btn-sm btn-secondary margin-top-auto" id="btnClearScan">
+                  <i data-lucide="rotate-ccw"></i>
+                  <span>Scan Another File</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: MOOD TIMELINE & SESSION ANALYTICS -->
+      <section class="tab-content" id="tab-analytics">
+        <div class="viewport-card glass-card">
+          <div class="viewport-header">
+            <div class="viewport-title-group">
+              <i data-lucide="line-chart" class="section-icon"></i>
+              <h3>Session Emotion Dynamics</h3>
+              <span class="badge">Realtime Telemetry Stream</span>
+            </div>
+            <button class="glass-btn btn-sm btn-secondary" id="btnClearChart">
+              <i data-lucide="trash-2"></i>
+              <span>Clear History</span>
+            </button>
+          </div>
+
+          <div class="analytics-layout">
+            <div class="chart-wrapper">
+              <canvas id="emotionTimelineChart"></canvas>
+            </div>
+            <div class="analytics-metrics-grid">
+              <div class="metric-card glass-panel">
+                <span class="metric-title">Emotional Stability</span>
+                <span class="metric-value" id="stabilityVal">94%</span>
+                <span class="metric-subtitle">Low Variance</span>
+              </div>
+              <div class="metric-card glass-panel">
+                <span class="metric-title">Peak Emotion</span>
+                <span class="metric-value highlight" id="peakEmotionVal">Joy</span>
+                <span class="metric-subtitle" id="peakConfidenceVal">98.4% Confidence</span>
+              </div>
+              <div class="metric-card glass-panel">
+                <span class="metric-title">Focus Index</span>
+                <span class="metric-value" id="focusIndexVal">88 / 100</span>
+                <span class="metric-subtitle">Attentive posture</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: MOOD SOUNDSCAPES STUDIO -->
+      <section class="tab-content" id="tab-soundscapes">
+        <div class="viewport-card glass-card">
+          <div class="viewport-header">
+            <div class="viewport-title-group">
+              <i data-lucide="headphones" class="section-icon"></i>
+              <h3>Procedural Mood Audio Generator</h3>
+              <span class="badge badge-accent">Web Audio Synthesis</span>
+            </div>
+          </div>
+
+          <div class="soundscapes-layout">
+            <div class="audio-hero-box glass-panel">
+              <div class="audio-pulse-ring" id="audioPulseRing">
+                <i data-lucide="music" class="music-icon"></i>
+              </div>
+              <h4 id="audioTrackName">Harmonic Ambient Flow</h4>
+              <p class="audio-desc" id="audioTrackDesc">Auto-adapting soundscape based on your current emotional frequency</p>
+              
+              <div class="audio-controls-row">
+                <button class="glass-btn btn-accent btn-lg" id="btnToggleAudio">
+                  <i data-lucide="play" id="audioPlayIcon"></i>
+                  <span id="audioPlayText">Enable Mood Soundscape</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="audio-mixers-grid">
+              <div class="mixer-card glass-panel">
+                <label>Master Volume</label>
+                <input type="range" id="masterVolumeSlider" min="0" max="100" value="70">
+              </div>
+              <div class="mixer-card glass-panel">
+                <label>Harmonic Warmth</label>
+                <input type="range" id="warmthSlider" min="0" max="100" value="60">
+              </div>
+              <div class="mixer-card glass-panel">
+                <label>Binaural Pulse</label>
+                <input type="range" id="binauralSlider" min="0" max="100" value="40">
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT SIDEBAR: REALTIME TELEMETRY & EMOTION GAUGES -->
+      <aside class="telemetry-sidebar glass-card">
+        <!-- Hero Emotion Card -->
+        <div class="dominant-hero-card" id="dominantHeroCard">
+          <div class="hero-header">
+            <span class="hero-label">Detected Vibe</span>
+            <span class="confidence-pill" id="dominantConfPill">99%</span>
+          </div>
+          <div class="hero-body">
+            <div class="emotion-emoji-box" id="heroEmojiBox">😊</div>
+            <h2 class="hero-emotion-title" id="heroEmotionTitle">Happy</h2>
+            <p class="hero-vibe-quote" id="heroVibeQuote">Vibrant & Engaged</p>
+          </div>
+        </div>
+
+        <!-- 7 Emotion Meters -->
+        <div class="emotion-meters-section">
+          <div class="section-title-sm">
+            <span>Emotion Spectrum</span>
+            <span class="mono">7 Channels</span>
+          </div>
+
+          <div class="meters-list">
+            <!-- Happy -->
+            <div class="meter-row" data-emotion="happy">
+              <div class="meter-info">
+                <span class="emotion-name"><span class="color-dot happy"></span> Happy</span>
+                <span class="emotion-pct" id="pct-happy">0%</span>
+              </div>
+              <div class="meter-track">
+                <div class="meter-bar happy" id="bar-happy" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- Neutral -->
+            <div class="meter-row" data-emotion="neutral">
+              <div class="meter-info">
+                <span class="emotion-name"><span class="color-dot neutral"></span> Neutral</span>
+                <span class="emotion-pct" id="pct-neutral">0%</span>
+              </div>
+              <div class="meter-track">
+                <div class="meter-bar neutral" id="bar-neutral" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- Surprised -->
+            <div class="meter-row" data-emotion="surprised">
+              <div class="meter-info">
+                <span class="emotion-name"><span class="color-dot surprised"></span> Surprised</span>
+                <span class="emotion-pct" id="pct-surprised">0%</span>
+              </div>
+              <div class="meter-track">
+                <div class="meter-bar surprised" id="bar-surprised" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- Sad -->
+            <div class="meter-row" data-emotion="sad">
+              <div class="meter-info">
+                <span class="emotion-name"><span class="color-dot sad"></span> Sad</span>
+                <span class="emotion-pct" id="pct-sad">0%</span>
+              </div>
+              <div class="meter-track">
+                <div class="meter-bar sad" id="bar-sad" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- Angry -->
+            <div class="meter-row" data-emotion="angry">
+              <div class="meter-info">
+                <span class="emotion-name"><span class="color-dot angry"></span> Angry</span>
+                <span class="emotion-pct" id="pct-angry">0%</span>
+              </div>
+              <div class="meter-track">
+                <div class="meter-bar angry" id="bar-angry" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- Fearful -->
+            <div class="meter-row" data-emotion="fearful">
+              <div class="meter-info">
+                <span class="emotion-name"><span class="color-dot fearful"></span> Fearful</span>
+                <span class="emotion-pct" id="pct-fearful">0%</span>
+              </div>
+              <div class="meter-track">
+                <div class="meter-bar fearful" id="bar-fearful" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- Disgusted -->
+            <div class="meter-row" data-emotion="disgusted">
+              <div class="meter-info">
+                <span class="emotion-name"><span class="color-dot disgusted"></span> Disgusted</span>
+                <span class="emotion-pct" id="pct-disgusted">0%</span>
+              </div>
+              <div class="meter-track">
+                <div class="meter-bar disgusted" id="bar-disgusted" style="width: 0%;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- System Controls Panel -->
+        <div class="settings-accordion glass-panel">
+          <div class="accordion-header">
+            <span><i data-lucide="sliders"></i> Detection Tuning</span>
+          </div>
+          <div class="accordion-body">
+            <div class="control-field">
+              <label>Smoothing Factor: <span id="smoothVal">0.3</span></label>
+              <input type="range" id="smoothSlider" min="0" max="9" value="3">
+            </div>
+            <div class="control-field">
+              <label>Min Confidence: <span id="confVal">50%</span></label>
+              <input type="range" id="confSlider" min="20" max="95" value="50">
+            </div>
+            <div class="control-checkbox">
+              <input type="checkbox" id="ambientSyncCheck" checked>
+              <label for="ambientSyncCheck">Sync Ambient Glass Aura</label>
+            </div>
+            <div class="control-checkbox">
+              <input type="checkbox" id="audioSyncCheck" checked>
+              <label for="audioSyncCheck">Sync Audio Soundscape</label>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+    </main>
+
+    <!-- Bottom Status Bar -->
+    <footer class="app-footer glass-card">
+      <div class="footer-left">
+        <span class="status-indicator-dot"></span>
+        <span id="footerStatusMsg">EmotiSync Client Core Engine Active</span>
+      </div>
+      <div class="footer-right mono">
+        <span>SESSION: <strong id="sessionDuration">00:00</strong></span>
+        <span class="separator">•</span>
+        <span>LATENCY: <strong id="footerLatency">12ms</strong></span>
+        <span class="separator">•</span>
+        <span>PRIVACY: <strong>100% LOCAL</strong></span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- SNAPSHOT PREVIEW MODAL -->
+  <div class="modal-backdrop hidden" id="snapshotModal">
+    <div class="modal-window glass-card">
+      <div class="modal-header">
+        <h3><i data-lucide="aperture"></i> Captured Frame Telemetry</h3>
+        <button class="modal-close" id="btnCloseModal"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="snapshot-img-container">
+          <img id="snapshotImgPreview" alt="Snapshot Preview">
+        </div>
+        <div class="snapshot-json-box">
+          <h4>Telemetry Metadata</h4>
+          <pre id="snapshotJsonPre"></pre>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="glass-btn btn-secondary" id="btnCopyJson">
+          <i data-lucide="copy"></i>
+          <span>Copy JSON</span>
+        </button>
+        <a id="btnDownloadSnapshot" class="glass-btn btn-accent" download="emotisync-snapshot.png">
+          <i data-lucide="download"></i>
+          <span>Download Image</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification System -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Main JavaScript Bundle -->
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
