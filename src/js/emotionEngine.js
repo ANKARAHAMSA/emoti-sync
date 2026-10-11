@@ -414,22 +414,94 @@ export class EmotionEngine {
     const avgCenterLip = centerLipLum / Math.max(1, centerCount);
     const avgCorners = (avgLeftCorner + avgRightCorner) / 2;
 
-    const isSmile = (mouthContrast > 115 || avgLum > 110);
+    // ── Eye region luminance: wide-open eyes (fearful/surprised) show bright whites ─
+    let eyeLum = 0, eyeCount = 0;
+    for (let y = Math.floor(120 * 0.30); y < Math.floor(120 * 0.48); y++) {
+      for (let x = Math.floor(160 * 0.20); x < Math.floor(160 * 0.80); x++) {
+        const idx = (y * 160 + x) * 4;
+        eyeLum += (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
+        eyeCount++;
+      }
+    }
+    const avgEyeLum = eyeLum / Math.max(1, eyeCount);
+
+    // ── Nose bridge / upper-lip region: disgust wrinkles create high local contrast ─
+    let noseWrinkleLum = 0, noseWrinkleMin = 255, noseWrinkleMax = 0, nwCount = 0;
+    for (let y = Math.floor(120 * 0.48); y < Math.floor(120 * 0.60); y++) {
+      for (let x = Math.floor(160 * 0.36); x < Math.floor(160 * 0.64); x++) {
+        const idx = (y * 160 + x) * 4;
+        const lum = (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
+        noseWrinkleLum += lum;
+        if (lum < noseWrinkleMin) noseWrinkleMin = lum;
+        if (lum > noseWrinkleMax) noseWrinkleMax = lum;
+        nwCount++;
+      }
+    }
+    const avgNoseLum = noseWrinkleLum / Math.max(1, nwCount);
+    const noseContrast = noseWrinkleMax - noseWrinkleMin;
+
+    // ── Upper lip raise: disgust lifts upper lip, darkening under-nose area ─
+    let upperLipLum = 0, ulCount = 0;
+    for (let y = Math.floor(120 * 0.56); y < Math.floor(120 * 0.64); y++) {
+      for (let x = Math.floor(160 * 0.38); x < Math.floor(160 * 0.62); x++) {
+        const idx = (y * 160 + x) * 4;
+        upperLipLum += (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
+        ulCount++;
+      }
+    }
+    const avgUpperLip = upperLipLum / Math.max(1, ulCount);
+
+    // ── Brow inner tension: fearful brows pull inward → dark crease between brows ─
+    let innerBrowLum = 0, ibCount = 0;
+    for (let y = Math.floor(120 * 0.22); y < Math.floor(120 * 0.32); y++) {
+      for (let x = Math.floor(160 * 0.40); x < Math.floor(160 * 0.60); x++) {
+        const idx = (y * 160 + x) * 4;
+        innerBrowLum += (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
+        ibCount++;
+      }
+    }
+    const avgInnerBrow = innerBrowLum / Math.max(1, ibCount);
+
+    // ── Classify: priority order matters ─────────────────────────────────────────
+
     const isOpenMouthLaugh = (mouthContrast > 140 && avgLum > 120);
-    const isSurprised = (browContrast > 130 && mouthContrast > 130 && avgLum > 130);
-    const isSadFrown = (avgCorners < avgCenterLip - 3 || (mouthContrast < 98 && avgLum < 128));
+    const isSmile          = (mouthContrast > 115 || avgLum > 110);
+    const isSurprised      = (browContrast > 130 && mouthContrast > 130 && avgLum > 130 && avgEyeLum > 115);
+    const isSadFrown       = (avgCorners < avgCenterLip - 3 || (mouthContrast < 98 && avgLum < 128));
+
+    // Disgusted: nose-bridge high contrast + upper lip raised (dark strip) + not open mouth
+    const isDisgusted = (
+      noseContrast > 70 &&
+      avgUpperLip < avgNoseLum - 8 &&
+      mouthContrast < 130 &&
+      !isOpenMouthLaugh
+    );
+
+    // Fearful: wide-open eyes (bright) + inner brow tension (darker crease) + moderate mouth openness + NOT smiling
+    const isFearful = (
+      avgEyeLum > 120 &&
+      avgInnerBrow < avgEyeLum - 10 &&
+      browContrast > 80 &&
+      mouthContrast > 60 &&
+      !isOpenMouthLaugh &&
+      !isSmile
+    );
 
     if (isOpenMouthLaugh) {
       return { happy: 0.95, neutral: 0.03, surprised: 0.02, sad: 0, angry: 0, fearful: 0, disgusted: 0 };
+    } else if (isSurprised) {
+      return { happy: 0.05, neutral: 0.05, surprised: 0.82, sad: 0.01, angry: 0.01, fearful: 0.05, disgusted: 0.01 };
+    } else if (isDisgusted) {
+      return { happy: 0.01, neutral: 0.04, surprised: 0.01, sad: 0.02, angry: 0.04, fearful: 0.01, disgusted: 0.87 };
+    } else if (isFearful) {
+      return { happy: 0.01, neutral: 0.04, surprised: 0.05, sad: 0.03, angry: 0.01, fearful: 0.84, disgusted: 0.02 };
     } else if (isSmile) {
       return { happy: 0.88, neutral: 0.08, surprised: 0.02, sad: 0.01, angry: 0.01, fearful: 0, disgusted: 0 };
-    } else if (isSurprised) {
-      return { happy: 0.10, neutral: 0.05, surprised: 0.82, sad: 0.01, angry: 0.01, fearful: 0.01, disgusted: 0 };
     } else if (isSadFrown) {
       return { happy: 0.01, neutral: 0.05, surprised: 0.01, sad: 0.88, angry: 0.03, fearful: 0.01, disgusted: 0.01 };
     }
 
-    return { happy: 0.05, neutral: 0.85, surprised: 0.03, sad: 0.03, angry: 0.02, fearful: 0.01, disgusted: 0.01 };
+    return { happy: 0.04, neutral: 0.84, surprised: 0.03, sad: 0.03, angry: 0.03, fearful: 0.02, disgusted: 0.01 };
   }
 
   smoothFaceScores(faceSlotIdx, newScores) {
