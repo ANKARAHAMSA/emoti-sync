@@ -1,7 +1,41 @@
 /**
- * Media Scanner — Processes offline user-uploaded images and videos, extracts multi-face
- * crops, and estimates emotion distribution per detected face.
+ * Media Scanner — Processes offline user-uploaded images and videos, runs real
+ * face-api.js neural network inference per detected face, and renders accurate
+ * per-face emotion distribution overlays and crop gallery cards.
  */
+
+let faceapi = null;
+
+async function getFaceapi() {
+  if (!faceapi) {
+    faceapi = await import('@vladmandic/face-api');
+    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
+    ]);
+  }
+  return faceapi;
+}
+
+const EMOTION_COLORS = {
+  happy:     '#00ff87',
+  neutral:   '#38bdf8',
+  surprised: '#c084fc',
+  sad:       '#60a5fa',
+  angry:     '#ff4757',
+  fearful:   '#ff9f43',
+  disgusted: '#10b981'
+};
+
+function getDominant(expressions) {
+  let best = 'neutral', bestScore = 0;
+  for (const [emo, score] of Object.entries(expressions)) {
+    if (score > bestScore) { bestScore = score; best = emo; }
+  }
+  return { emotion: best, conf: bestScore };
+}
 
 export class MediaScanner {
   constructor() {
@@ -12,6 +46,7 @@ export class MediaScanner {
     this.canvasOverlayEl = null;
     this.cropGalleryEl = null;
     this.currentFile = null;
+    this._analyzing = false;
   }
 
   init(elements) {
@@ -51,7 +86,6 @@ export class MediaScanner {
       this.videoPreviewEl.classList.add('hidden');
       this.imagePreviewEl.classList.remove('hidden');
       this.imagePreviewEl.src = e.target.result;
-
       this.imagePreviewEl.onload = () => {
         this.analyzeStaticImage(this.imagePreviewEl);
       };
@@ -65,88 +99,176 @@ export class MediaScanner {
     this.videoPreviewEl.classList.remove('hidden');
     this.videoPreviewEl.src = videoUrl;
     this.videoPreviewEl.play();
-
     this.videoPreviewEl.onloadeddata = () => {
       this.analyzeVideoFrame(this.videoPreviewEl);
     };
   }
 
-  analyzeStaticImage(imgEl) {
+  async analyzeStaticImage(imgEl) {
+    if (this._analyzing) return;
+    this._analyzing = true;
+
     const ctx = this.canvasOverlayEl.getContext('2d');
-    this.canvasOverlayEl.width = imgEl.width || imgEl.clientWidth;
-    this.canvasOverlayEl.height = imgEl.height || imgEl.clientHeight;
-    ctx.clearRect(0, 0, this.canvasOverlayEl.width, this.canvasOverlayEl.height);
+    const w = imgEl.naturalWidth || imgEl.clientWidth;
+    const h = imgEl.naturalHeight || imgEl.clientHeight;
+    this.canvasOverlayEl.width = w;
+    this.canvasOverlayEl.height = h;
+    ctx.clearRect(0, 0, w, h);
+    this.cropGalleryEl.innerHTML = '<p style="color:#64748b;font-size:12px;padding:8px">Analyzing faces…</p>';
 
-    // Simulate multi-face extraction for uploaded image
-    const faceSamples = [
-      { emotion: 'happy', conf: 0.98, x: 0.2, y: 0.25, w: 0.25, h: 0.35 },
-      { emotion: 'surprised', conf: 0.92, x: 0.55, y: 0.2, w: 0.25, h: 0.35 }
-    ];
+    try {
+      const fa = await getFaceapi();
+      const detections = await fa
+        .detectAllFaces(imgEl, new fa.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.35 }))
+        .withFaceExpressions();
 
-    this.renderScanResults(imgEl, faceSamples);
+      this.cropGalleryEl.innerHTML = '';
+
+      if (!detections || detections.length === 0) {
+        this.cropGalleryEl.innerHTML = '<p style="color:#64748b;font-size:12px;padding:8px">No faces detected.</p>';
+        this._analyzing = false;
+        return;
+      }
+
+      detections.forEach((det, idx) => {
+        const box = det.detection.box;
+        const expr = det.expressions;
+        const { emotion, conf } = getDominant(expr);
+        const color = EMOTION_COLORS[emotion] || '#00ff87';
+
+        // Draw bounding box with neon glow
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 16;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(box.x, box.y, box.width, box.height);
+        ctx.restore();
+
+        // Label badge above box
+        const label = `${emotion.toUpperCase()}  ${Math.round(conf * 100)}%`;
+        ctx.save();
+        ctx.font = 'bold 14px "JetBrains Mono", monospace';
+        const textW = ctx.measureText(label).width + 16;
+        const badgeY = Math.max(box.y - 30, 0);
+        ctx.fillStyle = 'rgba(0,0,0,0.75)';
+        ctx.fillRect(box.x, badgeY, textW, 26);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(box.x, badgeY, textW, 26);
+        ctx.fillStyle = color;
+        ctx.fillText(label, box.x + 8, badgeY + 17);
+        ctx.restore();
+
+        // Face crop card
+        const cropCanvas = document.createElement('canvas');
+        cropCanvas.width = 80;
+        cropCanvas.height = 80;
+        const cropCtx = cropCanvas.getContext('2d');
+        try {
+          cropCtx.drawImage(imgEl, box.x, box.y, box.width, box.height, 0, 0, 80, 80);
+        } catch {
+          cropCtx.fillStyle = '#1e293b';
+          cropCtx.fillRect(0, 0, 80, 80);
+        }
+
+        // Build emotion breakdown text (top 3)
+        const sorted = Object.entries(expr).sort((a, b) => b[1] - a[1]).slice(0, 3);
+        const breakdownHtml = sorted.map(([e, s]) =>
+          `<span style="color:${EMOTION_COLORS[e]||'#94a3b8'};font-size:10px">${e} ${Math.round(s*100)}%</span>`
+        ).join('  ');
+
+        const card = document.createElement('div');
+        card.className = 'face-crop-card';
+        card.style.flexDirection = 'column';
+        card.style.gap = '6px';
+        card.innerHTML = `
+          <div style="display:flex;gap:10px;align-items:center">
+            <div class="face-crop-thumb"></div>
+            <div class="face-crop-meta">
+              <span class="emotion-title" style="color:${color};text-transform:capitalize">${emotion}</span>
+              <span class="confidence-text">${Math.round(conf * 100)}% Confidence</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;padding-left:2px">${breakdownHtml}</div>
+        `;
+        card.querySelector('.face-crop-thumb').appendChild(cropCanvas);
+        this.cropGalleryEl.appendChild(card);
+      });
+    } catch (err) {
+      console.error('Media Scanner analysis failed:', err);
+      this.cropGalleryEl.innerHTML = '<p style="color:#ff4757;font-size:12px;padding:8px">Analysis failed. Retrying…</p>';
+      setTimeout(() => this.analyzeStaticImage(imgEl), 1500);
+    }
+
+    this._analyzing = false;
   }
 
-  analyzeVideoFrame(videoEl) {
+  async analyzeVideoFrame(videoEl) {
     const ctx = this.canvasOverlayEl.getContext('2d');
     this.canvasOverlayEl.width = videoEl.videoWidth || 640;
     this.canvasOverlayEl.height = videoEl.videoHeight || 480;
     ctx.clearRect(0, 0, this.canvasOverlayEl.width, this.canvasOverlayEl.height);
+    this.cropGalleryEl.innerHTML = '<p style="color:#64748b;font-size:12px;padding:8px">Analyzing frame…</p>';
 
-    const faceSamples = [
-      { emotion: 'neutral', conf: 0.94, x: 0.35, y: 0.25, w: 0.3, h: 0.45 }
-    ];
+    try {
+      const fa = await getFaceapi();
+      const detections = await fa
+        .detectAllFaces(videoEl, new fa.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.35 }))
+        .withFaceExpressions();
 
-    this.renderScanResults(videoEl, faceSamples);
-  }
+      this.cropGalleryEl.innerHTML = '';
 
-  renderScanResults(sourceMedia, faces) {
-    const ctx = this.canvasOverlayEl.getContext('2d');
-    const width = this.canvasOverlayEl.width;
-    const height = this.canvasOverlayEl.height;
-
-    this.cropGalleryEl.innerHTML = '';
-
-    faces.forEach((f, idx) => {
-      const fx = f.x * width;
-      const fy = f.y * height;
-      const fw = f.w * width;
-      const fh = f.h * height;
-
-      // Draw box on overlay canvas
-      ctx.strokeStyle = '#06b6d4';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(fx, fy, fw, fh);
-
-      // Create cropped face thumbnail for gallery
-      const cropCanvas = document.createElement('canvas');
-      cropCanvas.width = 80;
-      cropCanvas.height = 80;
-      const cropCtx = cropCanvas.getContext('2d');
-
-      try {
-        cropCtx.drawImage(sourceMedia, fx, fy, fw, fh, 0, 0, 80, 80);
-      } catch (e) {
-        // Fallback fill if drawImage fails
-        cropCtx.fillStyle = '#1e293b';
-        cropCtx.fillRect(0, 0, 80, 80);
+      if (!detections || detections.length === 0) {
+        this.cropGalleryEl.innerHTML = '<p style="color:#64748b;font-size:12px;padding:8px">No faces detected in this frame.</p>';
+        return;
       }
 
-      const card = document.createElement('div');
-      card.className = 'face-crop-card';
-      card.innerHTML = `
-        <div class="face-crop-thumb"></div>
-        <div class="face-crop-meta">
-          <span class="emotion-title">${f.emotion}</span>
-          <span class="confidence-text">${Math.round(f.conf * 100)}% Confidence</span>
-        </div>
-      `;
-      card.querySelector('.face-crop-thumb').appendChild(cropCanvas);
-      this.cropGalleryEl.appendChild(card);
-    });
+      detections.forEach((det) => {
+        const box = det.detection.box;
+        const expr = det.expressions;
+        const { emotion, conf } = getDominant(expr);
+        const color = EMOTION_COLORS[emotion] || '#00ff87';
+
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 16;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(box.x, box.y, box.width, box.height);
+        ctx.restore();
+
+        const cropCanvas = document.createElement('canvas');
+        cropCanvas.width = 80;
+        cropCanvas.height = 80;
+        const cropCtx = cropCanvas.getContext('2d');
+        try {
+          cropCtx.drawImage(videoEl, box.x, box.y, box.width, box.height, 0, 0, 80, 80);
+        } catch {
+          cropCtx.fillStyle = '#1e293b';
+          cropCtx.fillRect(0, 0, 80, 80);
+        }
+
+        const card = document.createElement('div');
+        card.className = 'face-crop-card';
+        card.innerHTML = `
+          <div class="face-crop-thumb"></div>
+          <div class="face-crop-meta">
+            <span class="emotion-title" style="color:${color}">${emotion}</span>
+            <span class="confidence-text">${Math.round(conf * 100)}% Confidence</span>
+          </div>
+        `;
+        card.querySelector('.face-crop-thumb').appendChild(cropCanvas);
+        this.cropGalleryEl.appendChild(card);
+      });
+    } catch (err) {
+      console.error('Video frame analysis failed:', err);
+    }
   }
 
   clearScan() {
     this.currentFile = null;
+    this._analyzing = false;
     this.dropzoneEl.classList.remove('hidden');
     this.resultsEl.classList.add('hidden');
     this.cropGalleryEl.innerHTML = '';
