@@ -10,13 +10,23 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/outfit": "^5.3.0",
     "@vladmandic/face-api": "^1.7.12",
     "canvas-confetti": "^1.9.4",
     "chart.js": "^4.4.8",
     "lucide": "^0.475.0"
   },
   "devDependencies": {
+    "jsdom": "^29.1.1",
     "vite": "^6.1.1",
     "vitest": "^3.0.6"
+  },
+  "license": "MIT",
+  "description": "Privacy-first, in-browser multi-face emotion recognition and mood analytics",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ANKARAHAMSA/emoti-sync.git"
   }
 }

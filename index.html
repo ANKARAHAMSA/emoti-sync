@@ -4,15 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EmotiSync — Realtime Face Emotion Recognition & Mood Telemetry</title>
-  <meta name="description" content="Ultra-modern, privacy-first facial emotion recognition, real-time analytics, and ambient color synchronization.">
-  
-  <!-- Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  
-  <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest"></script>
+  <meta name="description" content="Privacy-first facial emotion recognition that runs entirely in your browser: real-time multi-face analysis, mood analytics, and ambient color synchronization.">
   
   <!-- Styles -->
   <link rel="stylesheet" href="/src/style.css">
@@ -57,8 +49,8 @@
 
       <div class="header-actions">
         <div class="status-badge" id="engineStatusBadge">
-          <span class="status-dot green"></span>
-          <span id="engineStatusText">Local Engine Ready</span>
+          <span class="status-dot amber"></span>
+          <span id="engineStatusText">Loading emotion models…</span>
         </div>
         <button class="glass-btn btn-secondary" id="btnSnapshot" title="Capture Annotated Frame">
           <i data-lucide="aperture"></i>
@@ -106,9 +98,9 @@
             
             <!-- Video Overlay Controls / Watermark -->
             <div class="overlay-telemetry-badge" id="liveFpsBadge">
-              <span class="mono">FPS: <strong id="fpsVal">0</strong></span>
+              <span class="mono">FPS: <strong id="fpsVal">—</strong></span>
               <span class="divider">|</span>
-              <span class="mono">LATENCY: <strong id="latencyVal">12ms</strong></span>
+              <span class="mono">LATENCY: <strong id="latencyVal">—</strong></span>
             </div>
 
             <div class="camera-standby-screen" id="cameraStandby">
@@ -169,7 +161,7 @@
                 <i data-lucide="upload-cloud"></i>
               </div>
               <h4>Drag & Drop Photo or Video File</h4>
-              <p>Supports JPG, PNG, WEBP, MP4, WEBM up to 50MB</p>
+              <p>Supports JPG, PNG, WEBP, MP4, WEBM</p>
               <button class="glass-btn btn-secondary" id="btnSelectFile">
                 <i data-lucide="folder-open"></i>
                 <span>Browse Local Files</span>
@@ -221,24 +213,63 @@
             <div class="analytics-metrics-grid">
               <div class="metric-card glass-panel">
                 <span class="metric-title">Emotional Stability</span>
-                <span class="metric-value" id="stabilityVal">94%</span>
-                <span class="metric-subtitle">Low Variance</span>
+                <span class="metric-value" id="stabilityVal">—</span>
+                <span class="metric-subtitle" id="stabilitySub">Needs a few seconds of data</span>
               </div>
               <div class="metric-card glass-panel">
                 <span class="metric-title">Peak Emotion</span>
-                <span class="metric-value highlight" id="peakEmotionVal">Joy</span>
-                <span class="metric-subtitle" id="peakConfidenceVal">98.4% Confidence</span>
-              </div>
-              <div class="metric-card glass-panel">
-                <span class="metric-title">Focus Index</span>
-                <span class="metric-value" id="focusIndexVal">88 / 100</span>
-                <span class="metric-subtitle">Attentive posture</span>
+                <span class="metric-value highlight" id="peakEmotionVal">—</span>
+                <span class="metric-subtitle" id="peakConfidenceVal">Waiting for data</span>
               </div>
             </div>
           </div>
         </div>
       </section>
 
+      <!-- TAB 4: MOOD SOUNDSCAPES STUDIO -->
+      <section class="tab-content" id="tab-soundscapes">
+        <div class="viewport-card glass-card">
+          <div class="viewport-header">
+            <div class="viewport-title-group">
+              <i data-lucide="headphones" class="section-icon"></i>
+              <h3>Procedural Mood Audio Generator</h3>
+              <span class="badge badge-accent">Web Audio Synthesis</span>
+            </div>
+          </div>
+
+          <div class="soundscapes-layout">
+            <div class="audio-hero-box glass-panel">
+              <div class="audio-pulse-ring" id="audioPulseRing">
+                <i data-lucide="music" class="music-icon"></i>
+              </div>
+              <h4 id="audioTrackName">Harmonic Ambient Flow</h4>
+              <p class="audio-desc" id="audioTrackDesc">Auto-adapting soundscape based on your current emotional frequency</p>
+              
+              <div class="audio-controls-row">
+                <button class="glass-btn btn-accent btn-lg" id="btnToggleAudio">
+                  <i data-lucide="play" id="audioPlayIcon"></i>
+                  <span id="audioPlayText">Enable Mood Soundscape</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="audio-mixers-grid">
+              <div class="mixer-card glass-panel">
+                <label>Master Volume</label>
+                <input type="range" id="masterVolumeSlider" min="0" max="100" value="70">
+              </div>
+              <div class="mixer-card glass-panel">
+                <label>Harmonic Warmth</label>
+                <input type="range" id="warmthSlider" min="0" max="100" value="60">
+              </div>
+              <div class="mixer-card glass-panel">
+                <label>Binaural Pulse</label>
+                <input type="range" id="binauralSlider" min="0" max="100" value="40">
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <!-- RIGHT SIDEBAR: REALTIME TELEMETRY & EMOTION GAUGES -->
       <aside class="telemetry-sidebar glass-card">
@@ -246,12 +277,12 @@
         <div class="dominant-hero-card" id="dominantHeroCard">
           <div class="hero-header">
             <span class="hero-label">Detected Vibe</span>
-            <span class="confidence-pill" id="dominantConfPill">99%</span>
+            <span class="confidence-pill" id="dominantConfPill">—</span>
           </div>
           <div class="hero-body">
-            <div class="emotion-emoji-box" id="heroEmojiBox">😊</div>
-            <h2 class="hero-emotion-title" id="heroEmotionTitle">Happy</h2>
-            <p class="hero-vibe-quote" id="heroVibeQuote">Vibrant & Engaged</p>
+            <div class="emotion-emoji-box" id="heroEmojiBox">🫥</div>
+            <h2 class="hero-emotion-title" id="heroEmotionTitle">Camera off</h2>
+            <p class="hero-vibe-quote" id="heroVibeQuote">Start the camera to begin</p>
           </div>
         </div>
 
@@ -360,8 +391,8 @@
           </div>
           <div class="accordion-body">
             <div class="control-field">
-              <label>Smoothing Factor: <span id="smoothVal">0.3</span></label>
-              <input type="range" id="smoothSlider" min="0" max="9" value="3">
+              <label>Smoothing Factor: <span id="smoothVal">0.6</span></label>
+              <input type="range" id="smoothSlider" min="0" max="9" value="6">
             </div>
             <div class="control-field">
               <label>Min Confidence: <span id="confVal">50%</span></label>
@@ -382,12 +413,12 @@
     <footer class="app-footer glass-card">
       <div class="footer-left">
         <span class="status-indicator-dot"></span>
-        <span id="footerStatusMsg">EmotiSync Client Core Engine Active</span>
+        <span id="footerStatusMsg">Starting EmotiSync engine…</span>
       </div>
       <div class="footer-right mono">
         <span>SESSION: <strong id="sessionDuration">00:00</strong></span>
         <span class="separator">•</span>
-        <span>LATENCY: <strong id="footerLatency">12ms</strong></span>
+        <span>LATENCY: <strong id="footerLatency">—</strong></span>
         <span class="separator">•</span>
         <span>PRIVACY: <strong>100% LOCAL</strong></span>
       </div>

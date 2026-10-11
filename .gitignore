@@ -5,3 +5,8 @@ dist
 .env.local
 *.log
 .vercel
+
+benchmark/node_modules
+benchmark/data
+benchmark/results*.json
+benchmark/metrics.json

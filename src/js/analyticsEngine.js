@@ -1,26 +1,31 @@
 /**
- * Analytics Engine — Calculates emotional metrics, stability indices, positivity scores,
- * and maintains history for telemetry rendering and CSV/JSON log exports.
+ * Analytics Engine — calculates emotional metrics, stability, and positivity,
+ * keeps a short rolling window for the live chart, and a full-session log for export.
+ *
+ * Only real detections should be recorded (the UI skips frames with no face and demo mode).
  */
+
+const CSV_HEADERS = ['Timestamp', 'Time', 'Dominant', 'PositivityIndex', 'Happy', 'Neutral', 'Surprised', 'Sad', 'Angry', 'Fearful', 'Disgusted'];
 
 export class AnalyticsEngine {
   constructor() {
-    this.history = [];
-    this.maxDataPoints = 60; // Keep last 60 readings
+    this.history = [];            // rolling window shown in the chart / used for stability
+    this.maxDataPoints = 60;
+    this.sessionLog = [];         // everything recorded this session (used for export)
+    this.maxSessionPoints = 20000;
+    this.dominantCounts = {};     // session-wide counts for "peak state"
     this.chartInstance = null;
   }
 
-  addReading(emotionScores, dominantEmotion, confidence = 0.95) {
+  addReading(emotionScores, dominantEmotion, confidence = 0) {
     const timestamp = new Date();
-    const positivity = this.calculatePositivityScore(emotionScores);
-    
     const dataPoint = {
       timestamp: timestamp.toISOString(),
       timeLabel: timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       scores: { ...emotionScores },
       dominant: dominantEmotion,
       confidence,
-      positivity
+      positivity: this.calculatePositivityScore(emotionScores)
     };
 
     this.history.push(dataPoint);
@@ -28,6 +33,12 @@ export class AnalyticsEngine {
       this.history.shift();
     }
 
+    this.sessionLog.push(dataPoint);
+    if (this.sessionLog.length > this.maxSessionPoints) {
+      this.sessionLog.shift();
+    }
+
+    this.dominantCounts[dominantEmotion] = (this.dominantCounts[dominantEmotion] || 0) + 1;
     return dataPoint;
   }
 
@@ -41,47 +52,40 @@ export class AnalyticsEngine {
     const fearful = scores.fearful || 0;
     const disgusted = scores.disgusted || 0;
 
-    // Weighted positivity index formula
-    const weightedSum = (happy * 1.0) + (surprised * 0.75) + (neutral * 0.5) 
+    // Weighted positivity index: 0 = strongly negative, 50 = balanced, 100 = fully positive.
+    const weightedSum = (happy * 1.0) + (surprised * 0.75) + (neutral * 0.5)
                       - (sad * 0.5) - (angry * 0.8) - (fearful * 0.7) - (disgusted * 0.7);
-    
-    const normalized = Math.max(0, Math.min(100, Math.round(((weightedSum + 1) / 2) * 100)));
-    return normalized;
+
+    return Math.max(0, Math.min(100, Math.round(((weightedSum + 1) / 2) * 100)));
   }
 
+  /** Stability of positivity over the recent window, or null until there is enough data. */
   getEmotionalStability() {
-    if (this.history.length < 5) return 92;
-    // Calculate variance in positivity over recent history
-    const positivities = this.history.map(h => h.positivity);
+    if (this.history.length < 5) return null;
+    const positivities = this.history.map((h) => h.positivity);
     const mean = positivities.reduce((a, b) => a + b, 0) / positivities.length;
-    const variance = positivities.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / positivities.length;
+    const variance = positivities.reduce((a, b) => a + (b - mean) ** 2, 0) / positivities.length;
     const stdDev = Math.sqrt(variance);
-    
-    const stability = Math.max(40, Math.min(100, Math.round(100 - (stdDev * 1.5))));
-    return stability;
+    return Math.max(0, Math.min(100, Math.round(100 - stdDev * 1.5)));
   }
 
+  /** Most frequent dominant emotion this session, or null when nothing has been recorded. */
   getPeakEmotion() {
-    if (this.history.length === 0) return { emotion: 'Neutral', confidence: '90%' };
-    
-    const counts = {};
-    this.history.forEach(h => {
-      counts[h.dominant] = (counts[h.dominant] || 0) + 1;
-    });
+    const total = this.sessionLog.length;
+    if (total === 0) return null;
 
-    let peak = 'neutral';
+    let peak = null;
     let maxCount = 0;
-    for (const [emo, count] of Object.entries(counts)) {
-      if (count > maxCount) {
-        maxCount = count;
-        peak = emo;
-      }
+    for (const [emo, count] of Object.entries(this.dominantCounts)) {
+      if (count > maxCount) { maxCount = count; peak = emo; }
     }
+    if (!peak) return null;
 
-    const pct = Math.round((maxCount / this.history.length) * 100);
+    const counted = Object.values(this.dominantCounts).reduce((a, b) => a + b, 0);
     return {
       emotion: peak.charAt(0).toUpperCase() + peak.slice(1),
-      confidence: `${pct}% Dominance`
+      share: maxCount / counted,
+      confidence: `${Math.round((maxCount / counted) * 100)}% of session`
     };
   }
 
@@ -90,19 +94,16 @@ export class AnalyticsEngine {
       appName: 'EmotiSync',
       exportedAt: new Date().toISOString(),
       summary: {
-        totalReadings: this.history.length,
+        totalReadings: this.sessionLog.length,
         stabilityScore: this.getEmotionalStability(),
         peakState: this.getPeakEmotion()
       },
-      history: this.history
+      history: this.sessionLog
     }, null, 2);
   }
 
   exportAsCSV() {
-    if (this.history.length === 0) return 'Timestamp,Dominant,Positivity,Happy,Neutral,Surprised,Sad,Angry,Fearful,Disgusted\n';
-
-    const headers = ['Timestamp', 'Time', 'Dominant', 'PositivityIndex', 'Happy', 'Neutral', 'Surprised', 'Sad', 'Angry', 'Fearful', 'Disgusted'];
-    const rows = this.history.map(h => [
+    const rows = this.sessionLog.map((h) => [
       h.timestamp,
       h.timeLabel,
       h.dominant,
@@ -115,12 +116,13 @@ export class AnalyticsEngine {
       (h.scores.fearful || 0).toFixed(3),
       (h.scores.disgusted || 0).toFixed(3)
     ]);
-
-    return [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    return [CSV_HEADERS.join(','), ...rows.map((r) => r.join(','))].join('\n');
   }
 
   clearHistory() {
     this.history = [];
+    this.sessionLog = [];
+    this.dominantCounts = {};
   }
 }
 

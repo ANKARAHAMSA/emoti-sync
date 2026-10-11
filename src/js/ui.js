@@ -8,6 +8,7 @@ import { ambientEngine, EMOTION_THEMES } from './ambientEngine.js';
 import { analyticsEngine } from './analyticsEngine.js';
 import { audioEngine } from './audioEngine.js';
 import { mediaScanner } from './mediaScanner.js';
+import { onModelStatus, getModelStatus } from './modelLoader.js';
 import { Chart, registerables } from 'chart.js';
 
 Chart.register(...registerables);
@@ -16,9 +17,7 @@ export class UIController {
   constructor() {
     this.sessionStartTime = Date.now();
     this.chartInstance = null;
-    this.fpsFrameCount = 0;
-    this.lastFpsCalcTime = Date.now();
-    this.currentFps = 30;
+    this.noFaceTicks = 0;
   }
 
   init() {
@@ -26,15 +25,54 @@ export class UIController {
     this.bindControls();
     this.bindScanner();
     this.initChart();
+    this.bindModelStatus();
+    this.syncSliderDefaults();
     this.startTelemetryTimer();
-    
-    // Auto-start synthetic demo mode for smooth instant out-of-the-box preview
+
     const videoEl = document.getElementById('webcamVideo');
     const canvasEl = document.getElementById('overlayCanvas');
     emotionEngine.init(videoEl, canvasEl);
 
     // Try camera access silently or prepare standby
     this.attemptAutoCamera();
+  }
+
+  /** Header badge + footer show the REAL model state (loading / ready / failed). */
+  bindModelStatus() {
+    const badge = document.getElementById('engineStatusBadge');
+    const dot = badge ? badge.querySelector('.status-dot') : null;
+    const text = document.getElementById('engineStatusText');
+    const footer = document.getElementById('footerStatusMsg');
+
+    badge?.addEventListener('click', () => {
+      if (getModelStatus().state === 'error') emotionEngine.loadModelsInBackground();
+    });
+
+    onModelStatus(({ state, message }) => {
+      if (dot) {
+        dot.classList.remove('green', 'amber', 'red');
+        dot.classList.add(state === 'ready' ? 'green' : state === 'error' ? 'red' : 'amber');
+      }
+      badge?.classList.toggle('is-error', state === 'error');
+      if (text) text.textContent = state === 'error' ? `${message} — click to retry` : message;
+      if (footer) footer.textContent = state === 'ready' ? 'EmotiSync engine ready — running locally' : message;
+      if (state === 'error') {
+        this.showToast('Emotion models failed to load. Click the status badge to retry.', 'error');
+      }
+    });
+  }
+
+  /** Make the sliders' labels reflect the engine's actual starting values. */
+  syncSliderDefaults() {
+    const smooth = document.getElementById('smoothSlider');
+    const smoothVal = document.getElementById('smoothVal');
+    if (smooth) smooth.value = String(Math.round(emotionEngine.smoothingFactor * 10));
+    if (smoothVal) smoothVal.textContent = emotionEngine.smoothingFactor.toFixed(1);
+
+    const conf = document.getElementById('confSlider');
+    const confVal = document.getElementById('confVal');
+    if (conf) conf.value = String(Math.round(emotionEngine.minConfidence * 100));
+    if (confVal) confVal.textContent = `${Math.round(emotionEngine.minConfidence * 100)}%`;
   }
 
   async attemptAutoCamera() {
@@ -202,6 +240,16 @@ export class UIController {
       this.openSnapshotModal();
     });
 
+    document.getElementById('btnCopyJson')?.addEventListener('click', async () => {
+      const text = document.getElementById('snapshotJsonPre')?.textContent || '';
+      try {
+        await navigator.clipboard.writeText(text);
+        this.showToast('Telemetry JSON copied', 'success');
+      } catch {
+        this.showToast('Copy failed — select the text manually', 'error');
+      }
+    });
+
     document.getElementById('btnCloseModal')?.addEventListener('click', () => {
       document.getElementById('snapshotModal')?.classList.add('hidden');
     });
@@ -299,19 +347,86 @@ export class UIController {
   }
 
   startTelemetryTimer() {
-    setInterval(() => {
+    this.stopTelemetryTimer();
+    this.telemetryTimerId = setInterval(() => {
       this.updateTelemetryData();
       this.updateSessionDuration();
     }, 500); // 2Hz Telemetry Update Loop
   }
 
+  stopTelemetryTimer() {
+    if (this.telemetryTimerId) {
+      clearInterval(this.telemetryTimerId);
+      this.telemetryTimerId = null;
+    }
+  }
+
   updateTelemetryData() {
-    const scores = emotionEngine.smoothedScores;
-    const dominant = emotionEngine.getDominantEmotion(scores);
+    if (typeof document === 'undefined') return;
+    const engine = emotionEngine;
+    const streaming = engine.isStreaming;
+    const live = streaming && !engine.isDemoMode;
+    const faces = engine.detectedFaces || [];
+    const face = engine.getPrimaryFace();
+
+    // Measured performance (not placeholders)
+    const fpsText = live && engine.stats.fps ? String(Math.round(engine.stats.fps)) : '—';
+    const latText = live && engine.stats.latencyMs ? `${Math.round(engine.stats.latencyMs)}ms` : '—';
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('fpsVal', fpsText);
+    set('latencyVal', latText);
+    set('footerLatency', latText);
+
+    set('faceCountVal', streaming ? `${faces.length} Face${faces.length === 1 ? '' : 's'}` : '0 Faces');
+
+    if (!face) {
+      this.renderNoFace(streaming);
+    } else {
+      this.noFaceTicks = 0;
+      this.renderFace(face, faces);
+    }
+
+    this.renderAnalyticsMetrics();
+  }
+
+  renderNoFace(streaming) {
+    this.noFaceTicks += 1;
+    for (const emo of ['happy', 'neutral', 'surprised', 'sad', 'angry', 'fearful', 'disgusted']) {
+      const barEl = document.getElementById(`bar-${emo}`);
+      const pctEl = document.getElementById(`pct-${emo}`);
+      if (barEl) barEl.style.width = '0%';
+      if (pctEl) pctEl.textContent = '0%';
+    }
+
+    const status = getModelStatus();
+    let title = 'Camera off';
+    let quote = 'Start the camera to begin';
+    if (streaming) {
+      if (status.state === 'loading') { title = 'Loading models…'; quote = 'Preparing the local engine'; }
+      else if (status.state === 'error') { title = 'Models unavailable'; quote = 'Click the status badge to retry'; }
+      else { title = 'No face detected'; quote = 'Face the camera in good lighting'; }
+    }
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('heroEmotionTitle', title);
+    set('heroEmojiBox', '🫥');
+    set('heroVibeQuote', quote);
+    set('dominantConfPill', '—');
+    set('primaryEmotionTag', '—');
+    set('positivityScoreVal', '—');
+
+    document.getElementById('multiFaceContainer')?.classList.add('hidden');
+
+    // relax the ambient aura after a couple of seconds without a face
+    if (this.noFaceTicks === 4) ambientEngine.applyTheme('neutral');
+  }
+
+  renderFace(face, faces) {
+    const scores = face.scores;
+    const dominant = face.dominant;
+    const unsure = emotionEngine.isUncertain(face);
     const theme = ambientEngine.applyTheme(dominant);
     audioEngine.updateMood(dominant);
 
-    // Update 7 Meter Bars
     for (const [emo, score] of Object.entries(scores)) {
       const pct = Math.round(score * 100);
       const barEl = document.getElementById(`bar-${emo}`);
@@ -320,84 +435,61 @@ export class UIController {
       if (pctEl) pctEl.textContent = `${pct}%`;
     }
 
-    // Hero Emotion Card
-    const heroTitle = document.getElementById('heroEmotionTitle');
-    const heroEmoji = document.getElementById('heroEmojiBox');
-    const heroQuote = document.getElementById('heroVibeQuote');
-    const heroPill = document.getElementById('dominantConfPill');
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('heroEmotionTitle', unsure ? `${dominant}?` : dominant);
+    set('heroEmojiBox', theme.emoji);
+    set('heroVibeQuote', unsure ? 'Low confidence — try better lighting' : theme.quote);
+    set('dominantConfPill', `${Math.round(face.emotionConfidence * 100)}%`);
+    set('primaryEmotionTag', dominant);
+    set('positivityScoreVal', `${analyticsEngine.calculatePositivityScore(scores)}%`);
 
-    if (heroTitle) heroTitle.textContent = dominant;
-    if (heroEmoji) heroEmoji.textContent = theme.emoji;
-    if (heroQuote) heroQuote.textContent = theme.quote;
-    if (heroPill) heroPill.textContent = `${Math.round((scores[dominant] || 0.9) * 100)}%`;
-
-    // Add reading to analytics
-    const reading = analyticsEngine.addReading(scores, dominant, scores[dominant] || 0.95);
-
-    // Update Quick Telemetry
-    document.getElementById('primaryEmotionTag').textContent = dominant;
-    document.getElementById('positivityScoreVal').textContent = `${reading.positivity}%`;
-    
-    // Multi-Face Telemetry Update
-    const detectedFaces = emotionEngine.detectedFaces || [];
-    const faceCount = detectedFaces.length;
-    const faceCountVal = document.getElementById('faceCountVal');
-    if (faceCountVal) {
-      faceCountVal.textContent = emotionEngine.isStreaming 
-        ? (faceCount > 1 ? `${faceCount} Faces Tracked` : '1 Face Tracked')
-        : '0 Faces';
+    // Only real detections are recorded (demo mode shows synthetic faces).
+    if (!emotionEngine.isDemoMode) {
+      analyticsEngine.addReading(scores, dominant, face.emotionConfidence);
+      this.updateChart();
     }
 
     const multiContainer = document.getElementById('multiFaceContainer');
     const multiList = document.getElementById('multiFaceList');
-    const multiBadge = document.getElementById('multiFaceBadge');
-
-    if (faceCount > 1 && multiContainer && multiList) {
+    if (faces.length > 1 && multiContainer && multiList) {
       multiContainer.classList.remove('hidden');
-      if (multiBadge) multiBadge.textContent = `${faceCount} Tracked`;
-      
-      multiList.innerHTML = detectedFaces.map(f => `
+      set('multiFaceBadge', `${faces.length} Tracked`);
+      multiList.innerHTML = faces.map((f) => `
         <div class="multi-face-card">
-          <span class="face-tag">Face #${f.id || 1}</span>
-          <span class="face-emotion-badge">${f.dominant || 'neutral'} ${Math.round((f.confidence || 0.95) * 100)}%</span>
+          <span class="face-tag">Face #${f.id}</span>
+          <span class="face-emotion-badge">${f.dominant} ${Math.round(f.emotionConfidence * 100)}%</span>
         </div>
       `).join('');
     } else if (multiContainer) {
       multiContainer.classList.add('hidden');
     }
+  }
 
-    // Update Chart across all 7 emotions
-    if (this.chartInstance) {
-      const labels = analyticsEngine.history.map(h => h.timeLabel);
-      this.chartInstance.data.labels = labels;
-      this.chartInstance.data.datasets[0].data = analyticsEngine.history.map(h => Math.round((h.scores.happy || 0) * 100));
-      this.chartInstance.data.datasets[1].data = analyticsEngine.history.map(h => Math.round((h.scores.neutral || 0) * 100));
-      this.chartInstance.data.datasets[2].data = analyticsEngine.history.map(h => Math.round((h.scores.surprised || 0) * 100));
-      this.chartInstance.data.datasets[3].data = analyticsEngine.history.map(h => Math.round((h.scores.sad || 0) * 100));
-      this.chartInstance.data.datasets[4].data = analyticsEngine.history.map(h => Math.round((h.scores.angry || 0) * 100));
-      this.chartInstance.data.datasets[5].data = analyticsEngine.history.map(h => Math.round((h.scores.fearful || 0) * 100));
-      this.chartInstance.data.datasets[6].data = analyticsEngine.history.map(h => Math.round((h.scores.disgusted || 0) * 100));
-      this.chartInstance.update();
-    }
+  updateChart() {
+    if (!this.chartInstance) return;
+    const history = analyticsEngine.history;
+    const keys = ['happy', 'neutral', 'surprised', 'sad', 'angry', 'fearful', 'disgusted'];
+    this.chartInstance.data.labels = history.map((h) => h.timeLabel);
+    keys.forEach((k, i) => {
+      this.chartInstance.data.datasets[i].data = history.map((h) => Math.round((h.scores[k] || 0) * 100));
+    });
+    this.chartInstance.update('none');
+  }
 
-    // Update Analytics Tab Metrics
-    document.getElementById('stabilityVal').textContent = `${analyticsEngine.getEmotionalStability()}%`;
+  renderAnalyticsMetrics() {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    const stability = analyticsEngine.getEmotionalStability();
+    set('stabilityVal', stability === null ? '—' : `${stability}%`);
+    set('stabilitySub', stability === null ? 'Needs a few seconds of data'
+      : stability >= 80 ? 'Steady' : stability >= 60 ? 'Moderate' : 'Fluctuating');
+
     const peak = analyticsEngine.getPeakEmotion();
-    document.getElementById('peakEmotionVal').textContent = peak.emotion;
-    document.getElementById('peakConfidenceVal').textContent = peak.confidence;
-
-    // FPS calculation
-    this.fpsFrameCount++;
-    const now = Date.now();
-    if (now - this.lastFpsCalcTime >= 1000) {
-      this.currentFps = Math.min(60, this.fpsFrameCount * 2);
-      this.fpsFrameCount = 0;
-      this.lastFpsCalcTime = now;
-      document.getElementById('fpsVal').textContent = this.currentFps;
-    }
+    set('peakEmotionVal', peak ? peak.emotion : '—');
+    set('peakConfidenceVal', peak ? peak.confidence : 'Waiting for data');
   }
 
   updateSessionDuration() {
+    if (typeof document === 'undefined') return;
     const elapsedSec = Math.floor((Date.now() - this.sessionStartTime) / 1000);
     const mins = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
     const secs = String(elapsedSec % 60).padStart(2, '0');
@@ -406,27 +498,44 @@ export class UIController {
   }
 
   openSnapshotModal() {
-    const canvas = document.getElementById('overlayCanvas');
+    const overlay = document.getElementById('overlayCanvas');
+    const video = document.getElementById('webcamVideo');
     const snapshotImg = document.getElementById('snapshotImgPreview');
     const snapshotJson = document.getElementById('snapshotJsonPre');
     const downloadBtn = document.getElementById('btnDownloadSnapshot');
     const modal = document.getElementById('snapshotModal');
 
-    if (canvas && snapshotImg) {
-      const dataUrl = canvas.toDataURL('image/png');
+    if (overlay && snapshotImg) {
+      // Composite the camera frame + overlays so the snapshot shows the face, not just the boxes.
+      const out = document.createElement('canvas');
+      out.width = overlay.width || 640;
+      out.height = overlay.height || 480;
+      const octx = out.getContext('2d');
+      octx.fillStyle = '#000';
+      octx.fillRect(0, 0, out.width, out.height);
+      if (video && video.videoWidth && !emotionEngine.isDemoMode) {
+        const { scale, ox, oy } = emotionEngine.coverTransform();
+        octx.drawImage(video, ox, oy, video.videoWidth * scale, video.videoHeight * scale);
+      }
+      octx.drawImage(overlay, 0, 0);
+      const dataUrl = out.toDataURL('image/png');
       snapshotImg.src = dataUrl;
       if (downloadBtn) downloadBtn.href = dataUrl;
     }
 
-    const currentScores = emotionEngine.smoothedScores;
-    const dominant = emotionEngine.getDominantEmotion(currentScores);
+    const faces = (emotionEngine.detectedFaces || []).map((f) => ({
+      id: f.id,
+      dominantEmotion: f.dominant,
+      emotionConfidence: Number(f.emotionConfidence.toFixed(3)),
+      scores: Object.fromEntries(Object.entries(f.scores).map(([k, v]) => [k, Number(v.toFixed(3))]))
+    }));
 
     const snapshotData = {
       timestamp: new Date().toISOString(),
-      dominantEmotion: dominant,
-      scores: currentScores,
+      source: emotionEngine.isDemoMode ? 'synthetic-demo' : 'live-camera',
+      faces,
       stabilityIndex: analyticsEngine.getEmotionalStability(),
-      positivityIndex: analyticsEngine.calculatePositivityScore(currentScores)
+      positivityIndex: faces.length ? analyticsEngine.calculatePositivityScore(emotionEngine.getPrimaryFace().scores) : null
     };
 
     if (snapshotJson) {
@@ -437,6 +546,10 @@ export class UIController {
   }
 
   exportData() {
+    if (analyticsEngine.sessionLog.length === 0) {
+      this.showToast('No readings recorded yet — start the camera first', 'info');
+      return;
+    }
     const csvContent = analyticsEngine.exportAsCSV();
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -446,7 +559,8 @@ export class UIController {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    this.showToast('Session CSV telemetry exported!', 'success');
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    this.showToast(`Exported ${analyticsEngine.sessionLog.length} readings`, 'success');
   }
 
   showToast(message, type = 'info') {

@@ -4,20 +4,11 @@
  * per-face emotion distribution overlays and crop gallery cards.
  */
 
-let faceapi = null;
+import { loadModels } from './modelLoader.js';
+import { UNCERTAIN_BELOW } from './faceTracker.js';
 
-async function getFaceapi() {
-  if (!faceapi) {
-    faceapi = await import('@vladmandic/face-api');
-    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
-    await Promise.all([
-      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-      faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
-    ]);
-  }
-  return faceapi;
-}
+// Shared with the live engine: models load once, from this app's own files.
+const getFaceapi = () => loadModels();
 
 const EMOTION_COLORS = {
   happy:     '#00ff87',
@@ -47,6 +38,7 @@ export class MediaScanner {
     this.cropGalleryEl = null;
     this.currentFile = null;
     this._analyzing = false;
+    this._analyzingVideo = false;
   }
 
   init(elements) {
@@ -99,9 +91,10 @@ export class MediaScanner {
     this.videoPreviewEl.classList.remove('hidden');
     this.videoPreviewEl.src = videoUrl;
     this.videoPreviewEl.play();
-    this.videoPreviewEl.onloadeddata = () => {
-      this.analyzeVideoFrame(this.videoPreviewEl);
-    };
+    const rescan = () => this.analyzeVideoFrame(this.videoPreviewEl);
+    this.videoPreviewEl.onloadeddata = rescan;
+    this.videoPreviewEl.onseeked = rescan;
+    this.videoPreviewEl.onpause = rescan;
   }
 
   async analyzeStaticImage(imgEl) {
@@ -120,6 +113,7 @@ export class MediaScanner {
       const fa = await getFaceapi();
       const detections = await fa
         .detectAllFaces(imgEl, new fa.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.35 }))
+        .withFaceLandmarks()
         .withFaceExpressions();
 
       this.cropGalleryEl.innerHTML = '';
@@ -146,7 +140,7 @@ export class MediaScanner {
         ctx.restore();
 
         // Label badge above box
-        const label = `${emotion.toUpperCase()}  ${Math.round(conf * 100)}%`;
+        const label = `${emotion.toUpperCase()}${conf < UNCERTAIN_BELOW ? '?' : ''}  ${Math.round(conf * 100)}%`;
         ctx.save();
         ctx.font = 'bold 14px "JetBrains Mono", monospace';
         const textW = ctx.measureText(label).width + 16;
@@ -186,8 +180,8 @@ export class MediaScanner {
           <div style="display:flex;gap:10px;align-items:center">
             <div class="face-crop-thumb"></div>
             <div class="face-crop-meta">
-              <span class="emotion-title" style="color:${color};text-transform:capitalize">${emotion}</span>
-              <span class="confidence-text">${Math.round(conf * 100)}% Confidence</span>
+              <span class="emotion-title" style="color:${color};text-transform:capitalize">${emotion}${conf < UNCERTAIN_BELOW ? '?' : ''}</span>
+              <span class="confidence-text">${Math.round(conf * 100)}% confidence${conf < UNCERTAIN_BELOW ? ' (unsure)' : ''}</span>
             </div>
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;padding-left:2px">${breakdownHtml}</div>
@@ -197,14 +191,15 @@ export class MediaScanner {
       });
     } catch (err) {
       console.error('Media Scanner analysis failed:', err);
-      this.cropGalleryEl.innerHTML = '<p style="color:#ff4757;font-size:12px;padding:8px">Analysis failed. Retrying…</p>';
-      setTimeout(() => this.analyzeStaticImage(imgEl), 1500);
+      this.cropGalleryEl.innerHTML = '<p style="color:#ff4757;font-size:12px;padding:8px">Analysis failed — the emotion models could not be loaded. Reload the page and try again.</p>';
     }
 
     this._analyzing = false;
   }
 
   async analyzeVideoFrame(videoEl) {
+    if (this._analyzingVideo) return;
+    this._analyzingVideo = true;
     const ctx = this.canvasOverlayEl.getContext('2d');
     this.canvasOverlayEl.width = videoEl.videoWidth || 640;
     this.canvasOverlayEl.height = videoEl.videoHeight || 480;
@@ -215,12 +210,13 @@ export class MediaScanner {
       const fa = await getFaceapi();
       const detections = await fa
         .detectAllFaces(videoEl, new fa.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.35 }))
+        .withFaceLandmarks()
         .withFaceExpressions();
 
       this.cropGalleryEl.innerHTML = '';
 
       if (!detections || detections.length === 0) {
-        this.cropGalleryEl.innerHTML = '<p style="color:#64748b;font-size:12px;padding:8px">No faces detected in this frame.</p>';
+        this.cropGalleryEl.innerHTML = '<p style="color:#64748b;font-size:12px;padding:8px">No faces detected in this frame. Pause or seek to another frame to scan it.</p>';
         return;
       }
 
@@ -254,8 +250,8 @@ export class MediaScanner {
         card.innerHTML = `
           <div class="face-crop-thumb"></div>
           <div class="face-crop-meta">
-            <span class="emotion-title" style="color:${color}">${emotion}</span>
-            <span class="confidence-text">${Math.round(conf * 100)}% Confidence</span>
+            <span class="emotion-title" style="color:${color}">${emotion}${conf < UNCERTAIN_BELOW ? '?' : ''}</span>
+            <span class="confidence-text">${Math.round(conf * 100)}% confidence${conf < UNCERTAIN_BELOW ? ' (unsure)' : ''}</span>
           </div>
         `;
         card.querySelector('.face-crop-thumb').appendChild(cropCanvas);
@@ -263,6 +259,9 @@ export class MediaScanner {
       });
     } catch (err) {
       console.error('Video frame analysis failed:', err);
+      this.cropGalleryEl.innerHTML = '<p style="color:#ff4757;font-size:12px;padding:8px">Frame analysis failed — the emotion models could not be loaded.</p>';
+    } finally {
+      this._analyzingVideo = false;
     }
   }
 

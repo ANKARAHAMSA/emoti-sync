@@ -1,0 +1,17 @@
+{
+  "name": "emotisync-benchmark",
+  "private": true,
+  "description": "Offline accuracy benchmark for EmotiSync's emotion pipeline (not part of the web app bundle)",
+  "scripts": {
+    "fetch": "python3 fetch_data.py",
+    "eval": "node eval.cjs data 100000 results_asis.json && PAD=0.4 node eval.cjs data 100000 results_pad.json",
+    "metrics": "python3 metrics.py results_asis.json results_pad.json"
+  },
+  "dependencies": {
+    "@tensorflow/tfjs": "4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "4.22.0",
+    "@vladmandic/face-api": "1.7.15",
+    "sharp": "^0.35.5",
+    "onnxruntime-web": "1.30.0"
+  }
+}

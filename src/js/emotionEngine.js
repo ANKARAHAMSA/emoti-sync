@@ -1,39 +1,83 @@
 /**
- * Emotion Engine — Ultra-fast, hyper-accurate multi-face emotion recognition engine.
- * Supports simultaneous multi-face detection, individual facial expression analysis per person,
- * distinct bounding boxes with face ID badges, 68-point landmark wireframing, and smoothing.
+ * Emotion Engine — real-time multi-face emotion recognition.
+ *
+ * Pipeline (all in the browser, nothing leaves the device):
+ *   1. face-api.js TinyFaceDetector finds faces in the video frame.
+ *   2. FaceLandmark68Net gives the 68-point landmarks used for the mesh overlay.
+ *   3. FaceExpressionNet scores the 7 emotions per face.
+ *   4. FaceTracker matches faces across frames (by box overlap) and smooths scores per person.
+ *
+ * If the models are not loaded, no analysis is shown. There is deliberately no
+ * heuristic fallback: a brightness-based guess is not emotion recognition and
+ * would present made-up results as real ones.
  */
 
-let faceapi = null;
+import { loadModels, getModelStatus } from './modelLoader.js';
+import { FaceTracker, EMOTIONS, UNCERTAIN_BELOW, dominantOf } from './faceTracker.js';
+
+const COLOR_MAP = {
+  happy: '#f59e0b',
+  neutral: '#06b6d4',
+  surprised: '#a855f7',
+  sad: '#3b82f6',
+  angry: '#ef4444',
+  fearful: '#f97316',
+  disgusted: '#10b981'
+};
+
+// 68-point landmark index ranges (iBUG layout used by face-api.js)
+const LANDMARK_GROUPS = [
+  { from: 0, to: 16, closed: false },   // jaw
+  { from: 17, to: 21, closed: false },  // right brow
+  { from: 22, to: 26, closed: false },  // left brow
+  { from: 27, to: 35, closed: false },  // nose
+  { from: 36, to: 41, closed: true },   // right eye
+  { from: 42, to: 47, closed: true },   // left eye
+  { from: 48, to: 59, closed: true },   // outer mouth
+  { from: 60, to: 67, closed: true }    // inner mouth
+];
+
+function pickScores(expressions) {
+  return Object.fromEntries(EMOTIONS.map((e) => [e, (expressions && expressions[e]) || 0]));
+}
 
 export class EmotionEngine {
   constructor() {
     this.videoElement = null;
     this.canvasElement = null;
     this.ctx = null;
-    this.analysisCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
-    this.analysisCtx = this.analysisCanvas ? this.analysisCanvas.getContext('2d', { willReadFrequently: true }) : null;
-    
+
     this.isStreaming = false;
     this.isDemoMode = false;
     this.showMesh = true;
     this.showBbox = true;
-    this.smoothingFactor = 0.2; // Fast, responsive smoothing (0.2)
-    this.minConfidence = 0.35;
-    this.modelsLoaded = false;
-    this.isDetecting = false;
 
-    // Smoothed emotion probabilities per face slot
-    this.faceSmoothedScores = [];
+    this.minConfidence = 0.5;     // face-detector score threshold
+    this.uncertainBelow = UNCERTAIN_BELOW; // emotion confidence under this is shown as "unsure"
+    this.detectorInputSize = 320;
 
+    this.tracker = new FaceTracker({ smoothing: 0.6 });
+    this.faceapi = null;
     this.detectedFaces = [];
     this.animationFrameId = null;
     this.demoPhase = 0;
 
-    // Native FaceDetector API support check
-    this.nativeDetector = (typeof window !== 'undefined' && 'FaceDetector' in window) 
-      ? new window.FaceDetector({ fastMode: true, maxDetectedFaces: 10 }) 
-      : null;
+    // real measurements, shown in the UI
+    this.stats = { fps: 0, latencyMs: 0 };
+    this._lastFrameTs = 0;
+  }
+
+  /** 0 = no smoothing … 0.9 = very slow. The weight on a new frame is (1 - factor). */
+  get smoothingFactor() {
+    return this.tracker.smoothing;
+  }
+
+  set smoothingFactor(value) {
+    this.tracker.smoothing = Math.min(0.9, Math.max(0, Number(value) || 0));
+  }
+
+  get modelsReady() {
+    return this.faceapi !== null;
   }
 
   async init(videoEl, canvasEl) {
@@ -42,27 +86,21 @@ export class EmotionEngine {
     if (canvasEl) {
       this.ctx = canvasEl.getContext('2d');
     }
-    
-    this.loadModelsInBackground();
+    return this.loadModelsInBackground();
   }
 
   async loadModelsInBackground() {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined') return null;
     try {
-      if (!faceapi) {
-        faceapi = await import('@vladmandic/face-api');
-      }
-      const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
-      await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-        faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
-      ]);
-      this.modelsLoaded = true;
-      console.log('✅ Multi-face deep learning neural network models ready.');
-    } catch (err) {
-      console.warn('⚠️ Deep learning CDN model load deferred; using real-time multi-face geometry engine.', err);
+      this.faceapi = await loadModels();
+    } catch {
+      this.faceapi = null; // status is already 'error'; the UI shows it and offers a retry
     }
+    return this.faceapi;
+  }
+
+  getModelStatus() {
+    return getModelStatus();
   }
 
   async startWebcam() {
@@ -70,37 +108,34 @@ export class EmotionEngine {
       throw new Error('Webcam mediaDevices API not supported in this environment.');
     }
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-        audio: false
-      });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+      audio: false
+    });
 
-      this.videoElement.srcObject = stream;
-      await this.videoElement.play();
-      this.isStreaming = true;
-      this.isDemoMode = false;
+    this.videoElement.srcObject = stream;
+    await this.videoElement.play();
+    this.tracker.reset();
+    this.detectedFaces = [];
+    this.isStreaming = true;
+    this.isDemoMode = false;
 
-      this.resizeCanvas();
-      this.loop();
-      return true;
-    } catch (err) {
-      console.warn('Webcam initialization failed or permission denied.', err);
-      throw err;
-    }
+    this.resizeCanvas();
+    this.loop();
+    return true;
   }
 
   async toggleWebcam() {
     if (this.isStreaming) {
       this.stopStream();
       return false;
-    } else {
-      await this.startWebcam();
-      return true;
     }
+    await this.startWebcam();
+    return true;
   }
 
   startDemoMode() {
+    this.tracker.reset();
     this.isStreaming = true;
     this.isDemoMode = true;
     this.resizeCanvas();
@@ -117,19 +152,21 @@ export class EmotionEngine {
     if (this.videoElement) {
       if (this.videoElement.srcObject) {
         try {
-          const tracks = this.videoElement.srcObject.getTracks();
-          tracks.forEach(track => track.stop());
-        } catch (e) {}
+          this.videoElement.srcObject.getTracks().forEach((track) => track.stop());
+        } catch { /* already stopped */ }
         this.videoElement.srcObject = null;
       }
       try {
         this.videoElement.pause();
-      } catch (e) {}
+      } catch { /* not playing */ }
     }
     if (this.ctx && this.canvasElement) {
       this.ctx.clearRect(0, 0, this.canvasElement.width, this.canvasElement.height);
     }
+    this.tracker.reset();
     this.detectedFaces = [];
+    this.stats = { fps: 0, latencyMs: 0 };
+    this._lastFrameTs = 0;
   }
 
   resizeCanvas() {
@@ -141,435 +178,159 @@ export class EmotionEngine {
     }
   }
 
+  /** Keep the canvas matched to its container (window resizes, layout changes). */
+  syncCanvasSize() {
+    const parent = this.canvasElement && this.canvasElement.parentElement;
+    if (!parent) return;
+    if (parent.clientWidth && (parent.clientWidth !== this.canvasElement.width || parent.clientHeight !== this.canvasElement.height)) {
+      this.resizeCanvas();
+    }
+  }
+
   async loop() {
     if (!this.isStreaming) return;
 
+    const now = performance.now();
+    if (this._lastFrameTs) {
+      const instantFps = 1000 / Math.max(1, now - this._lastFrameTs);
+      this.stats.fps = this.stats.fps ? 0.9 * this.stats.fps + 0.1 * instantFps : instantFps;
+    }
+    this._lastFrameTs = now;
+
+    this.syncCanvasSize();
     this.ctx.clearRect(0, 0, this.canvasElement.width, this.canvasElement.height);
 
-    if (this.isDemoMode) {
-      this.processDemoFrame();
-    } else {
-      await this.processWebcamFrame();
+    try {
+      if (this.isDemoMode) {
+        this.processDemoFrame();
+      } else {
+        await this.processWebcamFrame();
+      }
+    } catch (err) {
+      console.error('Frame processing failed:', err);
     }
 
-    this.animationFrameId = requestAnimationFrame(() => this.loop());
+    if (this.isStreaming) {
+      this.animationFrameId = requestAnimationFrame(() => this.loop());
+    }
   }
 
+  /** Same transform the browser applies to the <video> (object-fit: cover), so overlays line up with faces. */
+  coverTransform() {
+    const vw = this.videoElement.videoWidth || this.canvasElement.width;
+    const vh = this.videoElement.videoHeight || this.canvasElement.height;
+    const cw = this.canvasElement.width;
+    const ch = this.canvasElement.height;
+    const scale = Math.max(cw / vw, ch / vh);
+    return { scale, ox: (cw - vw * scale) / 2, oy: (ch - vh * scale) / 2 };
+  }
+
+  async detectFaces(source) {
+    const fa = this.faceapi;
+    const options = new fa.TinyFaceDetectorOptions({
+      inputSize: this.detectorInputSize,
+      scoreThreshold: this.minConfidence
+    });
+    const results = await fa.detectAllFaces(source, options).withFaceLandmarks().withFaceExpressions();
+    return results.map((r) => ({
+      box: { x: r.detection.box.x, y: r.detection.box.y, width: r.detection.box.width, height: r.detection.box.height },
+      score: r.detection.score,
+      landmarks: r.landmarks,
+      scores: pickScores(r.expressions)
+    }));
+  }
+
+  async processWebcamFrame() {
+    const video = this.videoElement;
+    if (!video || video.readyState < 2 || !video.videoWidth) return;
+
+    // Models not loaded: show nothing rather than a guess. The UI surfaces the status.
+    if (!this.faceapi) {
+      this.detectedFaces = [];
+      return;
+    }
+
+    const t0 = performance.now();
+    const detections = await this.detectFaces(video);
+    const elapsed = performance.now() - t0;
+    this.stats.latencyMs = this.stats.latencyMs ? 0.8 * this.stats.latencyMs + 0.2 * elapsed : elapsed;
+
+    if (!this.isStreaming) return; // stopped while detection was running
+
+    this.detectedFaces = this.tracker.update(detections);
+    this.drawFaces();
+  }
+
+  drawFaces() {
+    const { scale, ox, oy } = this.coverTransform();
+    for (const face of this.detectedFaces) {
+      const b = face.box;
+      if (this.showBbox) {
+        this.drawBoundingBox(b.x * scale + ox, b.y * scale + oy, b.width * scale, b.height * scale, face);
+      }
+      if (this.showMesh && face.landmarks) {
+        this.drawLandmarks(face.landmarks.positions, scale, ox, oy);
+      }
+    }
+  }
+
+  // ── Demo mode: clearly labelled synthetic faces; never recorded as real data ──────
   processDemoFrame() {
     this.demoPhase += 0.03;
     const width = this.canvasElement.width;
     const height = this.canvasElement.height;
 
-    // Simulate 2 distinct people in demo mode
-    const face1X = width * 0.18 + Math.sin(this.demoPhase * 0.5) * 15;
-    const face1Y = height * 0.22 + Math.cos(this.demoPhase * 0.5) * 10;
-    const face1W = width * 0.32;
-    const face1H = height * 0.48;
-
-    const face2X = width * 0.54 + Math.cos(this.demoPhase * 0.6) * 15;
-    const face2Y = height * 0.25 + Math.sin(this.demoPhase * 0.6) * 10;
-    const face2W = width * 0.30;
-    const face2H = height * 0.45;
-
-    const rawScores1 = { happy: 0.92, neutral: 0.05, surprised: 0.02, sad: 0.01, angry: 0, fearful: 0, disgusted: 0 };
-    const rawScores2 = { happy: 0.05, neutral: 0.15, surprised: 0.78, sad: 0.01, angry: 0.01, fearful: 0, disgusted: 0 };
+    const make = (id, x, y, w, h, scores) => {
+      const dominant = dominantOf(scores);
+      return { id, box: { x, y, width: w, height: h }, scores, dominant, emotionConfidence: scores[dominant], detectionScore: 1, isDemo: true };
+    };
 
     this.detectedFaces = [
-      { id: 1, box: { x: face1X, y: face1Y, width: face1W, height: face1H }, scores: rawScores1, dominant: 'happy', confidence: 0.98 },
-      { id: 2, box: { x: face2X, y: face2Y, width: face2W, height: face2H }, scores: rawScores2, dominant: 'surprised', confidence: 0.94 }
+      make(1, width * 0.18 + Math.sin(this.demoPhase * 0.5) * 15, height * 0.22 + Math.cos(this.demoPhase * 0.5) * 10, width * 0.32, height * 0.48,
+        { happy: 0.92, neutral: 0.05, surprised: 0.02, sad: 0.01, angry: 0, fearful: 0, disgusted: 0 }),
+      make(2, width * 0.54 + Math.cos(this.demoPhase * 0.6) * 15, height * 0.25 + Math.sin(this.demoPhase * 0.6) * 10, width * 0.30, height * 0.45,
+        { happy: 0.05, neutral: 0.15, surprised: 0.78, sad: 0.01, angry: 0.01, fearful: 0, disgusted: 0 })
     ];
 
-    this.detectedFaces.forEach(face => {
+    for (const face of this.detectedFaces) {
       if (this.showBbox) {
-        this.drawBoundingBox(face.box.x, face.box.y, face.box.width, face.box.height, face.dominant, face.confidence, face.id);
+        this.drawBoundingBox(face.box.x, face.box.y, face.box.width, face.box.height, face);
       }
       if (this.showMesh) {
-        this.drawDynamicLandmarkWireframe(face.box.x, face.box.y, face.box.width, face.box.height, face.scores);
+        this.drawDemoWireframe(face.box.x, face.box.y, face.box.width, face.box.height);
       }
-    });
+    }
   }
 
-  async processWebcamFrame() {
-    const width = this.canvasElement.width;
-    const height = this.canvasElement.height;
+  // ── Queries ───────────────────────────────────────────────────────────────────────
 
-    if (!this.videoElement || this.videoElement.readyState < 2) return;
-
-    // 1. Multi-Face Neural Network Classification (face-api.js)
-    if (this.modelsLoaded && faceapi && !this.isDetecting) {
-      this.isDetecting = true;
-      try {
-        const detections = await faceapi
-          .detectAllFaces(this.videoElement, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: this.minConfidence }))
-          .withFaceLandmarks()
-          .withFaceExpressions();
-
-        this.isDetecting = false;
-
-        if (detections && detections.length > 0) {
-          const resizedDetections = faceapi.resizeResults(detections, { width, height });
-          
-          this.detectedFaces = resizedDetections.map((det, idx) => {
-            const rawExpressions = det.expressions;
-            const mappedScores = {
-              happy: rawExpressions.happy || 0,
-              neutral: rawExpressions.neutral || 0,
-              surprised: rawExpressions.surprised || 0,
-              sad: rawExpressions.sad || 0,
-              angry: rawExpressions.angry || 0,
-              fearful: rawExpressions.fearful || 0,
-              disgusted: rawExpressions.disgusted || 0
-            };
-
-            const smoothed = this.smoothFaceScores(idx, mappedScores);
-            const dominant = this.getDominantEmotion(smoothed);
-
-            return {
-              id: idx + 1,
-              box: det.detection.box,
-              scores: smoothed,
-              dominant,
-              confidence: det.detection.score,
-              landmarks: det.landmarks
-            };
-          });
-
-          // Draw individual boxes & landmarks for ALL detected faces
-          this.detectedFaces.forEach(face => {
-            const box = face.box;
-            if (this.showBbox) {
-              this.drawBoundingBox(box.x, box.y, box.width, box.height, face.dominant, face.confidence, face.id);
-            }
-            if (this.showMesh && face.landmarks) {
-              this.drawRealFaceLandmarks(face.landmarks);
-            }
-          });
-
-          return;
-        }
-      } catch (err) {
-        this.isDetecting = false;
-      }
-    }
-
-    // 2. High-speed Multi-Face Feature Analyzer (Zero Latency Geometry Failsafe)
-    const detectedBoxes = await this.detectMultiFaceBoxes(width, height);
-    
-    this.detectedFaces = detectedBoxes.map((box, idx) => {
-      const liveScores = this.analyzeRegionFeatures(box.x, box.y, box.w, box.h);
-      const smoothed = this.smoothFaceScores(idx, liveScores);
-      const dominant = this.getDominantEmotion(smoothed);
-
-      return {
-        id: idx + 1,
-        box: { x: box.x, y: box.y, width: box.w, height: box.h },
-        scores: smoothed,
-        dominant,
-        confidence: 0.95
-      };
-    });
-
-    this.detectedFaces.forEach(face => {
-      if (this.showBbox) {
-        this.drawBoundingBox(face.box.x, face.box.y, face.box.width, face.box.height, face.dominant, face.confidence, face.id);
-      }
-      if (this.showMesh) {
-        this.drawDynamicLandmarkWireframe(face.box.x, face.box.y, face.box.width, face.box.height, face.scores);
-      }
-    });
+  /** The largest visible face (the main subject), or null when nobody is in frame. */
+  getPrimaryFace() {
+    if (!this.detectedFaces.length) return null;
+    return this.detectedFaces.reduce((a, b) => (b.box.width * b.box.height > a.box.width * a.box.height ? b : a));
   }
 
-  async detectMultiFaceBoxes(canvasWidth, canvasHeight) {
-    // Try Native Browser FaceDetector API for multiple faces
-    if (this.nativeDetector && this.videoElement) {
-      try {
-        const faces = await this.nativeDetector.detect(this.videoElement);
-        if (faces && faces.length > 0) {
-          const scaleX = canvasWidth / (this.videoElement.videoWidth || 640);
-          const scaleY = canvasHeight / (this.videoElement.videoHeight || 480);
-          return faces.map(f => ({
-            x: f.boundingBox.x * scaleX,
-            y: f.boundingBox.y * scaleY,
-            w: f.boundingBox.width * scaleX,
-            h: f.boundingBox.height * scaleY
-          }));
-        }
-      } catch (e) {}
-    }
-
-    // Multi-region optical scanner (Detects left & right face regions if multiple people are in frame)
-    if (!this.analysisCtx || !this.videoElement) {
-      return [{ x: canvasWidth * 0.25, y: canvasHeight * 0.15, w: canvasWidth * 0.5, h: canvasHeight * 0.6 }];
-    }
-
-    this.analysisCanvas.width = 160;
-    this.analysisCanvas.height = 120;
-    this.analysisCtx.drawImage(this.videoElement, 0, 0, 160, 120);
-
-    const imgData = this.analysisCtx.getImageData(0, 0, 160, 120);
-    const data = imgData.data;
-
-    // Check skin tone / face luminance density in left half vs right half
-    let leftDensity = 0;
-    let rightDensity = 0;
-
-    for (let y = 20; y < 100; y += 4) {
-      for (let x = 10; x < 75; x += 4) {
-        const idx = (y * 160 + x) * 4;
-        if (data[idx] > 70 && data[idx] > data[idx + 2]) leftDensity++;
-      }
-      for (let x = 85; x < 150; x += 4) {
-        const idx = (y * 160 + x) * 4;
-        if (data[idx] > 70 && data[idx] > data[idx + 2]) rightDensity++;
-      }
-    }
-
-    // If both left & right regions have strong face presence -> return 2 separate face boxes!
-    if (leftDensity > 80 && rightDensity > 80) {
-      return [
-        { x: canvasWidth * 0.08, y: canvasHeight * 0.18, w: canvasWidth * 0.38, h: canvasHeight * 0.58 },
-        { x: canvasWidth * 0.54, y: canvasHeight * 0.18, w: canvasWidth * 0.38, h: canvasHeight * 0.58 }
-      ];
-    }
-
-    // Single central face box
-    return [{ x: canvasWidth * 0.25, y: canvasHeight * 0.15, w: canvasWidth * 0.5, h: canvasHeight * 0.6 }];
+  getDominantEmotion(scores) {
+    return dominantOf(scores || {});
   }
 
-  analyzeRegionFeatures(fx, fy, fw, fh) {
-    if (!this.videoElement || !this.analysisCtx) return { happy: 0.1, neutral: 0.8, surprised: 0.05, sad: 0.02, angry: 0.01, fearful: 0.01, disgusted: 0.01 };
-
-    this.analysisCanvas.width = 160;
-    this.analysisCanvas.height = 120;
-    this.analysisCtx.drawImage(this.videoElement, 0, 0, 160, 120);
-
-    const imgData = this.analysisCtx.getImageData(0, 0, 160, 120);
-    const data = imgData.data;
-
-    let smileBrightness = 0;
-    let mouthContrast = 0;
-    let sampleCount = 0;
-
-    const startY = Math.floor(120 * 0.55);
-    const endY = Math.floor(120 * 0.88);
-    const startX = Math.floor(160 * 0.28);
-    const endX = Math.floor(160 * 0.72);
-
-    let minLum = 255;
-    let maxLum = 0;
-
-    for (let y = startY; y < endY; y++) {
-      for (let x = startX; x < endX; x++) {
-        const idx = (y * 160 + x) * 4;
-        const r = data[idx];
-        const g = data[idx + 1];
-        const b = data[idx + 2];
-
-        const lum = (r * 0.299) + (g * 0.587) + (b * 0.114);
-        smileBrightness += lum;
-        if (lum < minLum) minLum = lum;
-        if (lum > maxLum) maxLum = lum;
-        sampleCount++;
-      }
-    }
-
-    const avgLum = smileBrightness / Math.max(1, sampleCount);
-    mouthContrast = maxLum - minLum;
-
-    let browContrast = 0, browMin = 255, browMax = 0;
-    for (let y = Math.floor(120 * 0.25); y < Math.floor(120 * 0.45); y++) {
-      for (let x = startX; x < endX; x++) {
-        const idx = (y * 160 + x) * 4;
-        const lum = (data[idx] * 0.299) + (data[idx + 1] * 0.587) + (data[idx + 2] * 0.114);
-        if (lum < browMin) browMin = lum;
-        if (lum > browMax) browMax = lum;
-      }
-    }
-    browContrast = browMax - browMin;
-
-    // Analyze mouth corners vs center lip for sad / frown / pout detection
-    let leftCornerLum = 0, rightCornerLum = 0, centerLipLum = 0;
-    let leftCount = 0, rightCount = 0, centerCount = 0;
-
-    for (let y = Math.floor(120 * 0.65); y < Math.floor(120 * 0.85); y++) {
-      for (let x = Math.floor(160 * 0.28); x < Math.floor(160 * 0.38); x++) {
-        const idx = (y * 160 + x) * 4;
-        leftCornerLum += (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
-        leftCount++;
-      }
-      for (let x = Math.floor(160 * 0.62); x < Math.floor(160 * 0.72); x++) {
-        const idx = (y * 160 + x) * 4;
-        rightCornerLum += (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
-        rightCount++;
-      }
-      for (let x = Math.floor(160 * 0.44); x < Math.floor(160 * 0.56); x++) {
-        const idx = (y * 160 + x) * 4;
-        centerLipLum += (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
-        centerCount++;
-      }
-    }
-
-    const avgLeftCorner = leftCornerLum / Math.max(1, leftCount);
-    const avgRightCorner = rightCornerLum / Math.max(1, rightCount);
-    const avgCenterLip = centerLipLum / Math.max(1, centerCount);
-    const avgCorners = (avgLeftCorner + avgRightCorner) / 2;
-
-    // ── Eye region luminance: wide-open eyes (fearful/surprised) show bright whites ─
-    let eyeLum = 0, eyeCount = 0;
-    for (let y = Math.floor(120 * 0.30); y < Math.floor(120 * 0.48); y++) {
-      for (let x = Math.floor(160 * 0.20); x < Math.floor(160 * 0.80); x++) {
-        const idx = (y * 160 + x) * 4;
-        eyeLum += (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
-        eyeCount++;
-      }
-    }
-    const avgEyeLum = eyeLum / Math.max(1, eyeCount);
-
-    // ── Nose bridge / upper-lip region: disgust wrinkles create high local contrast ─
-    let noseWrinkleLum = 0, noseWrinkleMin = 255, noseWrinkleMax = 0, nwCount = 0;
-    for (let y = Math.floor(120 * 0.48); y < Math.floor(120 * 0.60); y++) {
-      for (let x = Math.floor(160 * 0.36); x < Math.floor(160 * 0.64); x++) {
-        const idx = (y * 160 + x) * 4;
-        const lum = (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
-        noseWrinkleLum += lum;
-        if (lum < noseWrinkleMin) noseWrinkleMin = lum;
-        if (lum > noseWrinkleMax) noseWrinkleMax = lum;
-        nwCount++;
-      }
-    }
-    const avgNoseLum = noseWrinkleLum / Math.max(1, nwCount);
-    const noseContrast = noseWrinkleMax - noseWrinkleMin;
-
-    // ── Upper lip raise: disgust lifts upper lip, darkening under-nose area ─
-    let upperLipLum = 0, ulCount = 0;
-    for (let y = Math.floor(120 * 0.56); y < Math.floor(120 * 0.64); y++) {
-      for (let x = Math.floor(160 * 0.38); x < Math.floor(160 * 0.62); x++) {
-        const idx = (y * 160 + x) * 4;
-        upperLipLum += (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
-        ulCount++;
-      }
-    }
-    const avgUpperLip = upperLipLum / Math.max(1, ulCount);
-
-    // ── Brow inner tension: fearful brows pull inward → dark crease between brows ─
-    let innerBrowLum = 0, ibCount = 0;
-    for (let y = Math.floor(120 * 0.22); y < Math.floor(120 * 0.32); y++) {
-      for (let x = Math.floor(160 * 0.40); x < Math.floor(160 * 0.60); x++) {
-        const idx = (y * 160 + x) * 4;
-        innerBrowLum += (data[idx] * 0.299 + data[idx+1] * 0.587 + data[idx+2] * 0.114);
-        ibCount++;
-      }
-    }
-    const avgInnerBrow = innerBrowLum / Math.max(1, ibCount);
-
-    // ── Classify: priority order matters ─────────────────────────────────────────
-
-    const isOpenMouthLaugh = (mouthContrast > 140 && avgLum > 120);
-    const isSmile          = (mouthContrast > 115 || avgLum > 110);
-    const isSurprised      = (browContrast > 130 && mouthContrast > 130 && avgLum > 130 && avgEyeLum > 115);
-    const isSadFrown       = (avgCorners < avgCenterLip - 3 || (mouthContrast < 98 && avgLum < 128));
-
-    // Disgusted: nose-bridge high contrast + upper lip raised (dark strip) + not open mouth
-    const isDisgusted = (
-      noseContrast > 70 &&
-      avgUpperLip < avgNoseLum - 8 &&
-      mouthContrast < 130 &&
-      !isOpenMouthLaugh
-    );
-
-    // Fearful: wide-open eyes (bright) + inner brow tension (darker crease) + moderate mouth openness + NOT smiling
-    const isFearful = (
-      avgEyeLum > 120 &&
-      avgInnerBrow < avgEyeLum - 10 &&
-      browContrast > 80 &&
-      mouthContrast > 60 &&
-      !isOpenMouthLaugh &&
-      !isSmile
-    );
-
-    if (isOpenMouthLaugh) {
-      return { happy: 0.95, neutral: 0.03, surprised: 0.02, sad: 0, angry: 0, fearful: 0, disgusted: 0 };
-    } else if (isSurprised) {
-      return { happy: 0.05, neutral: 0.05, surprised: 0.82, sad: 0.01, angry: 0.01, fearful: 0.05, disgusted: 0.01 };
-    } else if (isDisgusted) {
-      return { happy: 0.01, neutral: 0.04, surprised: 0.01, sad: 0.02, angry: 0.04, fearful: 0.01, disgusted: 0.87 };
-    } else if (isFearful) {
-      return { happy: 0.01, neutral: 0.04, surprised: 0.05, sad: 0.03, angry: 0.01, fearful: 0.84, disgusted: 0.02 };
-    } else if (isSmile) {
-      return { happy: 0.88, neutral: 0.08, surprised: 0.02, sad: 0.01, angry: 0.01, fearful: 0, disgusted: 0 };
-    } else if (isSadFrown) {
-      return { happy: 0.01, neutral: 0.05, surprised: 0.01, sad: 0.88, angry: 0.03, fearful: 0.01, disgusted: 0.01 };
-    }
-
-    return { happy: 0.04, neutral: 0.84, surprised: 0.03, sad: 0.03, angry: 0.03, fearful: 0.02, disgusted: 0.01 };
+  isUncertain(face) {
+    return !!face && face.emotionConfidence < this.uncertainBelow;
   }
 
-  smoothFaceScores(faceSlotIdx, newScores) {
-    if (!this.faceSmoothedScores[faceSlotIdx]) {
-      this.faceSmoothedScores[faceSlotIdx] = { ...newScores };
-      return this.faceSmoothedScores[faceSlotIdx];
-    }
+  // ── Drawing ───────────────────────────────────────────────────────────────────────
 
-    const alpha = 1 - (this.smoothingFactor * 0.5);
-    const current = this.faceSmoothedScores[faceSlotIdx];
-    for (const emo in newScores) {
-      current[emo] = (alpha * newScores[emo]) + ((1 - alpha) * (current[emo] || 0));
-    }
-    return current;
-  }
-
-  getPrimarySmoothedScores() {
-    if (this.detectedFaces.length > 0 && this.detectedFaces[0].scores) {
-      return this.detectedFaces[0].scores;
-    }
-    return this.faceSmoothedScores[0] || { happy: 0.05, neutral: 0.85, surprised: 0.03, sad: 0.03, angry: 0.02, fearful: 0.01, disgusted: 0.01 };
-  }
-
-  get dominantEmotion() {
-    return this.getDominantEmotion(this.getPrimarySmoothedScores());
-  }
-
-  get smoothedScores() {
-    return this.getPrimarySmoothedScores();
-  }
-
-  getDominantEmotion(scores = this.smoothedScores) {
-    let dominant = 'neutral';
-    let maxScore = -1;
-    for (const [emo, score] of Object.entries(scores)) {
-      if (score > maxScore) {
-        maxScore = score;
-        dominant = emo;
-      }
-    }
-    return dominant;
-  }
-
-  drawBoundingBox(x, y, w, h, emotion, confidence, faceId = 1) {
+  drawBoundingBox(x, y, w, h, face) {
     const ctx = this.ctx;
     ctx.save();
 
-    const COLOR_MAP = {
-      happy: '#f59e0b',
-      neutral: '#06b6d4',
-      surprised: '#a855f7',
-      sad: '#3b82f6',
-      angry: '#ef4444',
-      fearful: '#f97316',
-      disgusted: '#10b981'
-    };
-
-    // Alternate hue highlights per face for distinct multi-face visualization
-    const accentColor = COLOR_MAP[emotion] || '#06b6d4';
-
+    const accentColor = COLOR_MAP[face.dominant] || '#06b6d4';
     ctx.strokeStyle = accentColor;
     ctx.lineWidth = 2.5;
     ctx.strokeRect(x, y, w, h);
 
-    const cornerLen = 22;
+    const cornerLen = Math.min(22, w / 3, h / 3);
     ctx.lineWidth = 4.5;
-    
-    // Sleek Corners
     ctx.beginPath();
     ctx.moveTo(x, y + cornerLen); ctx.lineTo(x, y); ctx.lineTo(x + cornerLen, y);
     ctx.moveTo(x + w - cornerLen, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + cornerLen);
@@ -577,111 +338,77 @@ export class EmotionEngine {
     ctx.moveTo(x + w - cornerLen, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - cornerLen);
     ctx.stroke();
 
-    // Distinct Badge Label above each face
-    const badgeText = `FACE #${faceId}: ${emotion.toUpperCase()} ${Math.round(confidence * 100)}%`;
+    // The % shown is the EMOTION confidence (not the face-detection score).
+    const unsure = this.isUncertain(face);
+    const name = unsure ? `${face.dominant.toUpperCase()}?` : face.dominant.toUpperCase();
+    const badgeText = `FACE #${face.id}: ${name} ${Math.round(face.emotionConfidence * 100)}%`;
     ctx.font = '700 12px "Outfit", sans-serif';
     const textWidth = ctx.measureText(badgeText).width;
+    const badgeY = Math.max(y - 28, 0);
 
     ctx.fillStyle = 'rgba(10, 12, 20, 0.90)';
-    ctx.fillRect(x, y - 28, textWidth + 16, 24);
-
+    ctx.fillRect(x, badgeY, textWidth + 16, 24);
     ctx.strokeStyle = accentColor;
     ctx.lineWidth = 1.5;
-    ctx.strokeRect(x, y - 28, textWidth + 16, 24);
-
+    ctx.strokeRect(x, badgeY, textWidth + 16, 24);
     ctx.fillStyle = accentColor;
-    ctx.fillText(badgeText, x + 8, y - 12);
+    ctx.fillText(badgeText, x + 8, badgeY + 16);
 
     ctx.restore();
   }
 
-  drawRealFaceLandmarks(landmarks) {
+  drawLandmarks(positions, scale, ox, oy) {
     const ctx = this.ctx;
     ctx.save();
     ctx.strokeStyle = 'rgba(6, 182, 212, 0.6)';
     ctx.fillStyle = '#06b6d4';
     ctx.lineWidth = 1.5;
 
-    const positions = landmarks.positions;
-    positions.forEach(pt => {
+    const pts = positions.map((p) => ({ x: p.x * scale + ox, y: p.y * scale + oy }));
+    pts.forEach((pt) => {
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
       ctx.fill();
     });
 
-    const jaw = landmarks.getJawOutline();
-    const mouth = landmarks.getMouth();
-    const leftEye = landmarks.getLeftEye();
-    const rightEye = landmarks.getRightEye();
-    const nose = landmarks.getNose();
-
-    [jaw, mouth, leftEye, rightEye, nose].forEach(feature => {
-      if (!feature || feature.length === 0) return;
+    for (const g of LANDMARK_GROUPS) {
+      if (pts.length <= g.to) continue;
       ctx.beginPath();
-      ctx.moveTo(feature[0].x, feature[0].y);
-      for (let i = 1; i < feature.length; i++) {
-        ctx.lineTo(feature[i].x, feature[i].y);
-      }
-      ctx.closePath();
+      ctx.moveTo(pts[g.from].x, pts[g.from].y);
+      for (let i = g.from + 1; i <= g.to; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      if (g.closed) ctx.closePath();
       ctx.stroke();
-    });
-
+    }
     ctx.restore();
   }
 
-  drawDynamicLandmarkWireframe(x, y, w, h, scores) {
+  /** Decorative grid for the synthetic demo only. It does not represent real landmarks. */
+  drawDemoWireframe(x, y, w, h) {
     const ctx = this.ctx;
     ctx.save();
-
-    const isHappy = (scores.happy || 0) > 0.4;
-    const isSurprised = (scores.surprised || 0) > 0.4;
-
-    ctx.strokeStyle = isHappy ? 'rgba(245, 158, 11, 0.4)' : (isSurprised ? 'rgba(168, 85, 247, 0.4)' : 'rgba(6, 182, 212, 0.35)');
-    ctx.fillStyle = isHappy ? '#f59e0b' : '#06b6d4';
+    ctx.strokeStyle = 'rgba(6, 182, 212, 0.35)';
+    ctx.fillStyle = '#06b6d4';
     ctx.lineWidth = 1;
-
-    const points = [];
     const rows = 6;
     const cols = 8;
     for (let r = 0; r <= rows; r++) {
       for (let c = 0; c <= cols; c++) {
-        const px = x + (w * (c / cols));
-        let py = y + (h * (r / rows));
-        
-        if (isHappy && (r === 4 || r === 5) && (c >= 2 && c <= 6)) {
-          py -= Math.sin(((c - 2) / 4) * Math.PI) * 12;
+        const px = x + w * (c / cols);
+        const py = y + h * (r / rows);
+        ctx.beginPath();
+        ctx.arc(px, py, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        if (c < cols) {
+          ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(x + w * ((c + 1) / cols), py); ctx.stroke();
         }
-
-        points.push({ x: px, y: py });
+        if (r < rows) {
+          ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, y + h * ((r + 1) / rows)); ctx.stroke();
+        }
       }
     }
-
-    for (let i = 0; i < points.length; i++) {
-      const p = points[i];
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
-      ctx.fill();
-
-      if ((i + 1) % (cols + 1) !== 0) {
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(points[i + 1].x, points[i + 1].y);
-        ctx.stroke();
-      }
-      if (i + cols + 1 < points.length) {
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(points[i + cols + 1].x, points[i + cols + 1].y);
-        ctx.stroke();
-      }
-    }
-
     ctx.restore();
-  }
-
-  drawSyntheticFaceMesh(x, y, w, h) {
-    this.drawDynamicLandmarkWireframe(x, y, w, h, this.smoothedScores);
   }
 }
 
+export { EMOTIONS };
 export const emotionEngine = new EmotionEngine();
